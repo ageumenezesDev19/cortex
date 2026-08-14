@@ -491,13 +491,22 @@ function confirmTitle(confirm: Confirm) {
   return ""
 }
 
-/** Says what actually goes, because the fear is always about the notes. */
+/**
+ * Says what actually goes. The fear is always about the notes, and they stay —
+ * but the curation is the work, and that is what leaves. No word from the code
+ * ("manifest", "index") belongs in a sentence someone reads under pressure.
+ */
 function confirmDetail(confirm: Confirm) {
   if (confirm?.kind === "topic") {
     const count = confirm.topic.members.length
-    return `O tópico sai da lista e o manifesto é apagado. As ${count} ${
-      count === 1 ? "nota ou print que ele reúne continua" : "notas e prints que ele reúne continuam"
-    } no vault, intocadas.`
+    if (count === 0) {
+      return "O tópico não reúne nada ainda, então nada mais se perde com ele."
+    }
+    return `As ${count} ${
+      count === 1 ? "nota ou print continua" : "notas e prints continuam"
+    } no vault, intocadas — mas a lista de que ${
+      count === 1 ? "pertence" : "pertencem"
+    } a este tópico se perde, e refazer é na mão.`
   }
   if (confirm?.kind === "entry") {
     return confirm.entry.kind === "folder"
