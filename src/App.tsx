@@ -1,6 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { ArrowLeft, FilePlus, FolderPlus } from "lucide-react"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ConfirmDialog } from "./components/confirm-dialog"
@@ -46,6 +46,7 @@ import {
   type VaultStatus,
 } from "./lib/api"
 import { cn } from "./lib/utils"
+import { useViewportHeight } from "./lib/viewport"
 
 /** Fast enough that the results feel like they were already there. */
 const DEBOUNCE_MS = 120
@@ -99,6 +100,7 @@ export default function App() {
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
   const reduceMotion = useReducedMotion()
+  const keyboardOpen = useViewportHeight()
   const results = useRef<HTMLDivElement>(null)
   const searchField = useRef<HTMLInputElement>(null)
 
@@ -300,7 +302,8 @@ export default function App() {
   const openPath = open?.path ?? null
 
   return (
-    <div className="flex h-dvh flex-col-reverse overflow-hidden bg-background sm:h-screen sm:flex-row">
+    <div className="fixed inset-x-0 top-0 flex h-[var(--app-h,100dvh)] flex-col-reverse overflow-hidden bg-background sm:static sm:h-screen sm:flex-row">
+      {!keyboardOpen && (
       <Rail
         panel={panel}
         onTogglePanel={(next) => setPanel((current) => (current === next ? "none" : next))}
@@ -317,6 +320,7 @@ export default function App() {
             .catch(() => {})
         }}
       />
+      )}
 
       <TopicsPanel
         open={panel === "topics"}
@@ -356,6 +360,8 @@ export default function App() {
           transition={transition}
           className={cn(
             "mx-auto w-full max-w-3xl px-4 sm:px-6",
+            // Whatever else moves, what is being typed stays on screen.
+            "sticky top-0 z-20 bg-background",
             browsing || open ? "pt-6" : "flex flex-1 flex-col justify-start pt-10 sm:justify-center sm:pt-0",
           )}
         >
@@ -388,18 +394,16 @@ export default function App() {
                   open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
-                <AnimatePresence initial={false} mode="popLayout">
-                  {groups.map((group, position) => (
-                    <motion.div
-                      key={group.key}
-                      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{
-                        duration: reduceMotion ? 0 : 0.12,
-                        delay: reduceMotion ? 0 : Math.min(position, 8) * 0.02,
-                      }}
-                    >
+                {groups.map((group, position) => (
+                  <motion.div
+                    key={group.key}
+                    initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{
+                      duration: reduceMotion ? 0 : 0.12,
+                      delay: reduceMotion ? 0 : Math.min(position, 8) * 0.02,
+                    }}
+                  >
                       <ResultGroup
                         group={group}
                         query={query}
@@ -416,9 +420,8 @@ export default function App() {
                             .catch(() => {})
                         }}
                       />
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
+                  </motion.div>
+                ))}
 
                 {groups.length === 0 && (
                   <p className="pt-8 text-center font-mono text-sm text-muted-foreground">

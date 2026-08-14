@@ -4,6 +4,21 @@
 
 @layer base {
   /*
+   * The bar leaves with the keyboard, so anything that stops "where the bar
+   * begins" takes the whole screen while it is gone.
+   */
+  html[data-keyboard="open"] {
+    --rail: 0px;
+  }
+
+  /* Only the containers inside scroll. The page itself scrolling is what pushed
+     the search field off screen when the keyboard opened. */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+
+  /*
    * Light theme. Every colour in the app comes from a token defined here, so
    * switching themes is one class on <html> rather than a patch per screen.
    */
