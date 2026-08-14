@@ -3,6 +3,8 @@ mod db;
 mod index;
 mod ocr;
 mod parse;
+mod search;
+mod topics;
 mod vault;
 mod watch;
 
@@ -33,6 +35,12 @@ pub fn run() {
             commands::get_note,
             commands::vault_status,
             commands::import_images,
+            commands::list_topics,
+            commands::create_topic,
+            commands::update_topic,
+            commands::delete_topic,
+            commands::add_to_topic,
+            commands::remove_from_topic,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

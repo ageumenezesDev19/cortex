@@ -43,6 +43,7 @@ fn run(app: &AppHandle, root: PathBuf) -> Result<()> {
     debouncer.watch(&root, RecursiveMode::Recursive)?;
 
     emit(app, &indexer, "scanning", None, 0);
+    let _ = indexer.sync_topics();
     let pending = indexer.scan()?;
     emit(app, &indexer, "ocr", None, pending.len());
 
@@ -75,6 +76,9 @@ fn apply(app: &AppHandle, indexer: &mut Indexer, path: &Path) -> bool {
     let root = indexer.root().to_path_buf();
     if vault::is_ignored(&root, path) {
         return false;
+    }
+    if vault::is_topic_manifest(&root, path) {
+        return indexer.sync_topics().is_ok();
     }
     let is_markdown = vault::is_markdown(path);
     let is_image = vault::is_image(path);

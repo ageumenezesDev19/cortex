@@ -13,7 +13,7 @@ export function NoteReader({ hit }: { hit: Hit }) {
   const [error, setError] = useState<string | null>(null)
   const mark = useRef<HTMLElement>(null)
 
-  const path = hit.notePath ?? hit.path
+  const path = hit.path
 
   useEffect(() => {
     let active = true

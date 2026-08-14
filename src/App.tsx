@@ -6,16 +6,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ImageReader } from "./components/image-reader"
 import { NoteReader } from "./components/note-reader"
 import { Rail } from "./components/rail"
-import { ResultCard } from "./components/result-card"
+import { ResultGroup } from "./components/result-group"
 import { SearchField } from "./components/search-field"
 import { StatusBar } from "./components/status-bar"
+import { TopicsPanel } from "./components/topics-panel"
 import {
+  addToTopic,
+  createTopic,
+  deleteTopic,
   importImages,
   INDEX_STATUS_EVENT,
+  listTopics,
   search,
   vaultStatus,
+  type Group,
   type Hit,
   type IndexStatus,
+  type Topic,
   type VaultStatus,
 } from "./lib/api"
 import { cn } from "./lib/utils"
@@ -25,25 +32,40 @@ const DEBOUNCE_MS = 120
 
 export default function App() {
   const [query, setQuery] = useState("")
-  const [hits, setHits] = useState<Hit[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
   const [selected, setSelected] = useState(0)
   const [open, setOpen] = useState<Hit | null>(null)
   const [status, setStatus] = useState<IndexStatus | null>(null)
   const [vault, setVault] = useState<VaultStatus | null>(null)
   const [dropping, setDropping] = useState(false)
+  const [topics, setTopics] = useState<Topic[]>([])
+  const [topic, setTopic] = useState<Topic | null>(null)
+  const [topicsOpen, setTopicsOpen] = useState(false)
 
   const reduceMotion = useReducedMotion()
   const results = useRef<HTMLDivElement>(null)
+
+  // Keyboard navigation runs over every passage on screen; it must not know
+  // that the list is grouped.
+  const hits = useMemo(() => groups.flatMap((group) => group.hits), [groups])
+
+  const refreshTopics = useCallback(() => {
+    listTopics()
+      .then(setTopics)
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     vaultStatus()
       .then(setVault)
       .catch(() => {})
+    refreshTopics()
+
     const unlisten = listen<IndexStatus>(INDEX_STATUS_EVENT, (event) => setStatus(event.payload))
     return () => {
       unlisten.then((stop) => stop())
     }
-  }, [])
+  }, [refreshTopics])
 
   // Screenshots dropped on the window land in the vault; the watcher takes it
   // from there, exactly as if they had been saved from the Finder.
@@ -64,35 +86,37 @@ export default function App() {
 
   useEffect(() => {
     const term = query.trim()
-    if (term.length === 0) {
-      setHits([])
+    if (term.length === 0 && !topic) {
+      setGroups([])
       setOpen(null)
       return
     }
     const timer = setTimeout(() => {
-      search(term)
+      search(term, topic?.slug ?? null)
         .then((found) => {
-          setHits(found)
+          setGroups(found)
           setSelected(0)
         })
-        .catch(() => setHits([]))
+        .catch(() => setGroups([]))
     }, DEBOUNCE_MS)
 
     return () => clearTimeout(timer)
     // `indexedChunks` re-runs the search when the indexer finishes new work, so
     // a screenshot dropped mid-search shows up without retyping.
-  }, [query, indexedChunks])
+  }, [query, topic, indexedChunks])
 
   const move = useCallback(
     (delta: number) => {
       setSelected((current) => {
         if (hits.length === 0) return 0
         const next = Math.min(Math.max(current + delta, 0), hits.length - 1)
-        results.current?.children[next]?.scrollIntoView({ block: "nearest" })
+        results.current
+          ?.querySelector(`[data-hit="${hits[next].chunkId}"]`)
+          ?.scrollIntoView({ block: "nearest" })
         return next
       })
     },
-    [hits.length],
+    [hits],
   )
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -105,14 +129,18 @@ export default function App() {
     } else if (event.key === "Enter") {
       event.preventDefault()
       if (hits[selected]) setOpen(hits[selected])
+    } else if (event.key === "Backspace" && query.length === 0 && topic) {
+      event.preventDefault()
+      setTopic(null)
     } else if (event.key === "Escape") {
       event.preventDefault()
       if (open) setOpen(null)
-      else setQuery("")
+      else if (query.length > 0) setQuery("")
+      else setTopic(null)
     }
   }
 
-  const searching = query.trim().length > 0
+  const browsing = query.trim().length > 0 || topic !== null
   const transition = useMemo(
     () => ({ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" as const }),
     [reduceMotion],
@@ -120,7 +148,28 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <Rail />
+      <Rail topicsOpen={topicsOpen} onToggleTopics={() => setTopicsOpen((value) => !value)} />
+
+      <TopicsPanel
+        open={topicsOpen}
+        topics={topics}
+        activeSlug={topic?.slug ?? null}
+        onClose={() => setTopicsOpen(false)}
+        onPick={(picked) => setTopic(picked.slug === topic?.slug ? null : picked)}
+        onCreate={(name, icon, color) => {
+          createTopic(name, icon, color)
+            .then(refreshTopics)
+            .catch(() => {})
+        }}
+        onDelete={(slug) => {
+          deleteTopic(slug)
+            .then(() => {
+              if (topic?.slug === slug) setTopic(null)
+              refreshTopics()
+            })
+            .catch(() => {})
+        }}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <motion.div
@@ -128,26 +177,34 @@ export default function App() {
           transition={transition}
           className={cn(
             "mx-auto w-full max-w-3xl px-6",
-            searching ? "pt-6" : "flex flex-1 flex-col justify-center",
+            browsing ? "pt-6" : "flex flex-1 flex-col justify-center",
           )}
         >
-          <SearchField value={query} onChange={setQuery} onKeyDown={onKeyDown} compact={searching} />
-          {!searching && <EmptyState vault={vault} dropping={dropping} />}
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            onKeyDown={onKeyDown}
+            compact={browsing}
+            topic={topic}
+            onClearTopic={() => setTopic(null)}
+          />
+          {!browsing && <EmptyState vault={vault} dropping={dropping} />}
         </motion.div>
 
-        {searching && (
+        {browsing && (
           <div className="flex min-h-0 flex-1 gap-4 px-6 pb-4 pt-4">
             <div
               ref={results}
               className={cn(
-                "min-h-0 space-y-2 overflow-y-auto",
-                open ? "w-[22rem] shrink-0" : "mx-auto w-full max-w-3xl",
+                "min-h-0 space-y-3 overflow-y-auto",
+                open ? "w-[24rem] shrink-0" : "mx-auto w-full max-w-3xl",
               )}
             >
               <AnimatePresence initial={false}>
-                {hits.map((hit, position) => (
+                {groups.map((group, position) => (
                   <motion.div
-                    key={hit.chunkId}
+                    key={group.key}
+                    data-hit-group={group.key}
                     initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
@@ -156,21 +213,31 @@ export default function App() {
                       delay: reduceMotion ? 0 : Math.min(position, 8) * 0.02,
                     }}
                   >
-                    <ResultCard
-                      hit={hit}
+                    <ResultGroup
+                      group={group}
                       query={query}
                       root={vault?.root ?? ""}
-                      selected={position === selected}
-                      onSelect={() => setSelected(position)}
-                      onOpen={() => setOpen(hit)}
+                      topics={topics}
+                      selectedHit={hits[selected] ?? null}
+                      onSelect={(hit) =>
+                        setSelected(hits.findIndex((one) => one.chunkId === hit.chunkId))
+                      }
+                      onOpen={setOpen}
+                      onAddToTopic={(slug, path) => {
+                        addToTopic(slug, path)
+                          .then(refreshTopics)
+                          .catch(() => {})
+                      }}
                     />
                   </motion.div>
                 ))}
               </AnimatePresence>
 
-              {hits.length === 0 && (
+              {groups.length === 0 && (
                 <p className="pt-8 text-center font-mono text-sm text-muted-foreground">
-                  nada encontrado para “{query.trim()}”
+                  {topic && query.trim().length === 0
+                    ? `nada em ${topic.name} ainda`
+                    : `nada encontrado para “${query.trim()}”`}
                 </p>
               )}
             </div>

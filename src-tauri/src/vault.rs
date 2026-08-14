@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 
 pub const VAULT_DIR: &str = "Cortex";
 pub const INDEX_DIR: &str = ".index";
+pub const TOPICS_DIR: &str = ".topics";
 pub const ASSETS_DIR: &str = "_assets";
 
 const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "heic", "heif", "webp", "tiff", "gif"];
@@ -40,17 +41,24 @@ pub fn db_path(root: &Path) -> PathBuf {
     root.join(INDEX_DIR).join("cortex.db")
 }
 
-/// Everything under `.index/` is ours, and dotfiles are someone else's business
-/// (`.git`, `.DS_Store`, editor swap files).
+/// Dotfiles are someone else's business (`.git`, `.DS_Store`, editor swap
+/// files) and `.index/` is ours to rebuild. `.topics/` is the exception: the
+/// manifests live in a dot-folder but the watcher has to see them change.
 pub fn is_ignored(root: &Path, path: &Path) -> bool {
     let Ok(rel) = path.strip_prefix(root) else {
         return true;
     };
-    rel.components().any(|c| {
-        c.as_os_str()
+    rel.components().any(|component| {
+        component
+            .as_os_str()
             .to_str()
-            .is_some_and(|s| s.starts_with('.') && s != ".")
+            .is_some_and(|name| name.starts_with('.') && name != "." && name != TOPICS_DIR)
     })
+}
+
+pub fn is_topic_manifest(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .is_ok_and(|rel| rel.starts_with(TOPICS_DIR))
 }
 
 pub fn is_markdown(path: &Path) -> bool {

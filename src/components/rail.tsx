@@ -1,7 +1,7 @@
 import { FolderTree, Layers, Monitor, Moon, Search, Sun } from "lucide-react"
 
-import { useTheme, type Theme } from "./theme-provider"
 import { cn } from "../lib/utils"
+import { useTheme, type Theme } from "./theme-provider"
 
 const THEMES: { value: Theme; icon: typeof Sun; label: string }[] = [
   { value: "light", icon: Sun, label: "Tema claro" },
@@ -9,17 +9,25 @@ const THEMES: { value: Theme; icon: typeof Sun; label: string }[] = [
   { value: "system", icon: Monitor, label: "Seguir o sistema" },
 ]
 
-/**
- * Topics and the folder tree arrive in M3. They sit here disabled rather than
- * absent so the shape of the app stops moving between milestones.
- */
-export function Rail() {
+/** The folder tree arrives in M6; it sits here disabled so the shape holds. */
+export function Rail({
+  topicsOpen,
+  onToggleTopics,
+}: {
+  topicsOpen: boolean
+  onToggleTopics: () => void
+}) {
   const { theme, setTheme } = useTheme()
 
   return (
     <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-card py-3">
-      <RailButton icon={Search} label="Buscar" active />
-      <RailButton icon={Layers} label="Tópicos (em breve)" disabled />
+      <RailButton icon={Search} label="Buscar" active={!topicsOpen} />
+      <RailButton
+        icon={Layers}
+        label="Tópicos"
+        active={topicsOpen}
+        onClick={onToggleTopics}
+      />
       <RailButton icon={FolderTree} label="Pastas (em breve)" disabled />
 
       <div className="mt-auto flex flex-col gap-1">

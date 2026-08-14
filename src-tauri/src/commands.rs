@@ -5,32 +5,13 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::State;
 
-use crate::ocr::{OcrBlock, OcrResult};
+use crate::search::{self, Group};
+use crate::topics::{self, Topic};
 use crate::vault;
 
 pub struct AppState {
     pub conn: Mutex<Connection>,
     pub root: PathBuf,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Hit {
-    pub chunk_id: i64,
-    pub kind: String,
-    /// Note path for text hits, image path for OCR hits — always relative to
-    /// the vault root.
-    pub path: String,
-    pub title: String,
-    pub note_path: Option<String>,
-    pub note_title: Option<String>,
-    pub heading_path: String,
-    pub snippet: String,
-    pub start_offset: i64,
-    pub end_offset: i64,
-    /// Only for image hits: the boxes Vision drew, so the UI can frame the line
-    /// that matched inside the screenshot.
-    pub blocks: Vec<OcrBlock>,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,69 +31,16 @@ pub struct VaultStatus {
     pub chunks: i64,
 }
 
-const SEARCH_SQL: &str = r#"
-SELECT c.id, c.kind, c.heading_path, c.start_offset, c.end_offset,
-       n.path, n.title, a.path, a.ocr_json,
-       snippet(chunks_fts, 0, '<<<', '>>>', '…', 14)
-FROM chunks_fts
-JOIN chunks c ON c.id = chunks_fts.rowid
-LEFT JOIN notes  n ON n.id = c.note_id
-LEFT JOIN assets a ON a.id = c.asset_id
-WHERE chunks_fts MATCH ?1
-ORDER BY bm25(chunks_fts)
-LIMIT ?2
-"#;
-
 #[tauri::command]
-pub fn search(state: State<AppState>, query: String, limit: Option<u32>) -> Result<Vec<Hit>, String> {
-    let Some(match_expr) = fts_query(&query) else {
-        return Ok(Vec::new());
-    };
+pub fn search(
+    state: State<AppState>,
+    query: String,
+    topic: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<Group>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare_cached(SEARCH_SQL).map_err(|e| e.to_string())?;
-
-    let rows = stmt
-        .query_map(
-            rusqlite::params![match_expr, limit.unwrap_or(40)],
-            |row| {
-                let note_path: Option<String> = row.get(5)?;
-                let note_title: Option<String> = row.get(6)?;
-                let asset_path: Option<String> = row.get(7)?;
-                let ocr_json: Option<String> = row.get(8)?;
-                let kind: String = row.get(1)?;
-
-                let blocks = ocr_json
-                    .and_then(|raw| serde_json::from_str::<OcrResult>(&raw).ok())
-                    .map(|ocr| ocr.blocks)
-                    .unwrap_or_default();
-
-                let path = asset_path
-                    .clone()
-                    .or_else(|| note_path.clone())
-                    .unwrap_or_default();
-                let title = match kind.as_str() {
-                    "image" => file_name_of(&path),
-                    _ => note_title.clone().unwrap_or_else(|| file_name_of(&path)),
-                };
-
-                Ok(Hit {
-                    chunk_id: row.get(0)?,
-                    kind,
-                    path,
-                    title,
-                    note_path,
-                    note_title,
-                    heading_path: row.get(2)?,
-                    snippet: row.get(9)?,
-                    start_offset: row.get(3)?,
-                    end_offset: row.get(4)?,
-                    blocks,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    search::run(&conn, &query, topic.as_deref(), limit.unwrap_or(40))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -176,39 +104,80 @@ pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<u32, 
     Ok(copied)
 }
 
-/// Turns typed words into an FTS5 prefix query. Stripping everything that is not
-/// alphanumeric keeps the user's quotes and asterisks from being read as syntax.
-fn fts_query(input: &str) -> Option<String> {
-    let terms: Vec<String> = input
-        .split_whitespace()
-        .map(|term| {
-            term.chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{term}\"*"))
-        .collect();
+// Topic commands write manifests and nothing else. The watcher sees the change
+// and refreshes the database mirror, so there is exactly one path into the
+// index no matter who made the edit — the app or the editor.
 
-    (!terms.is_empty()).then(|| terms.join(" "))
+#[tauri::command]
+pub fn list_topics(state: State<AppState>) -> Result<Vec<Topic>, String> {
+    topics::load_all(&state.root).map_err(|e| e.to_string())
 }
 
-fn file_name_of(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
+#[tauri::command]
+pub fn create_topic(
+    state: State<AppState>,
+    name: String,
+    icon: Option<String>,
+    color: Option<String>,
+) -> Result<Topic, String> {
+    let slug = topics::slugify(&name);
+    if slug.is_empty() {
+        return Err("um tópico precisa de um nome".into());
+    }
+    if topics::load(&state.root, &slug).is_ok() {
+        return Err(format!("já existe um tópico chamado {name}"));
+    }
+
+    let topic = Topic {
+        slug,
+        name: name.trim().to_string(),
+        icon,
+        color,
+        members: Vec::new(),
+    };
+    topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
+    Ok(topic)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::fts_query;
+#[tauri::command]
+pub fn update_topic(
+    state: State<AppState>,
+    slug: String,
+    name: String,
+    icon: Option<String>,
+    color: Option<String>,
+) -> Result<Topic, String> {
+    let mut topic = topics::load(&state.root, &slug).map_err(|e| e.to_string())?;
+    topic.name = name.trim().to_string();
+    topic.icon = icon;
+    topic.color = color;
+    topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
+    Ok(topic)
+}
 
-    #[test]
-    fn builds_a_prefix_query_per_term() {
-        assert_eq!(fts_query("server actions").unwrap(), "\"server\"* \"actions\"*");
-    }
+#[tauri::command]
+pub fn delete_topic(state: State<AppState>, slug: String) -> Result<(), String> {
+    topics::delete(&state.root, &slug).map_err(|e| e.to_string())
+}
 
-    #[test]
-    fn keeps_accents_and_drops_syntax() {
-        assert_eq!(fts_query("código \"OR\"").unwrap(), "\"código\"* \"OR\"*");
-        assert!(fts_query("  * ").is_none());
+#[tauri::command]
+pub fn add_to_topic(state: State<AppState>, slug: String, path: String) -> Result<Topic, String> {
+    let mut topic = topics::load(&state.root, &slug).map_err(|e| e.to_string())?;
+    if !topic.members.contains(&path) {
+        topic.members.push(path);
+        topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
     }
+    Ok(topic)
+}
+
+#[tauri::command]
+pub fn remove_from_topic(
+    state: State<AppState>,
+    slug: String,
+    path: String,
+) -> Result<Topic, String> {
+    let mut topic = topics::load(&state.root, &slug).map_err(|e| e.to_string())?;
+    topic.members.retain(|member| member != &path);
+    topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
+    Ok(topic)
 }

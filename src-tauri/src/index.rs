@@ -28,6 +28,13 @@ impl Indexer {
         &self.root
     }
 
+    /// Reloads the topic manifests into their database mirror. Whole-file
+    /// replacement, so an edit made in the editor cannot leave the index behind.
+    pub fn sync_topics(&mut self) -> Result<()> {
+        let topics = crate::topics::load_all(&self.root)?;
+        crate::topics::sync_to_db(&mut self.conn, &topics)
+    }
+
     /// Returns `false` when the file was already indexed unchanged — the hash
     /// comparison is what keeps a `git checkout` from reindexing the vault.
     pub fn index_note(&mut self, abs: &Path) -> Result<bool> {
