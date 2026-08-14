@@ -8,6 +8,13 @@
    * switching themes is one class on <html> rather than a patch per screen.
    */
   :root {
+    /*
+     * Height of the bottom bar on a phone: its padding, the 44 px button and the
+     * border, plus whatever the home indicator takes. Written once here because
+     * the panels have to stop exactly where it starts.
+     */
+    --rail: calc(3.25rem + 1px + env(safe-area-inset-bottom));
+
     --background: 40 20% 97%;
     --foreground: 222 49% 10%;
 

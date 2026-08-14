@@ -11,7 +11,7 @@ export function StatusBar({
   const phase = status?.phase ?? "idle"
 
   return (
-    <footer className="flex shrink-0 items-center gap-4 border-t px-4 py-2 font-mono text-xs text-muted-foreground">
+    <footer className="flex shrink-0 items-center gap-4 border-t bg-background px-4 py-2 font-mono text-xs text-muted-foreground">
       <span>
         {counts?.notes ?? 0} notas · {counts?.images ?? 0} prints · {counts?.chunks ?? 0} trechos
       </span>

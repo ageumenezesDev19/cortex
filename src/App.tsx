@@ -356,7 +356,7 @@ export default function App() {
           transition={transition}
           className={cn(
             "mx-auto w-full max-w-3xl px-4 sm:px-6",
-            browsing || open ? "pt-6" : "flex flex-1 flex-col justify-center",
+            browsing || open ? "pt-6" : "flex flex-1 flex-col justify-start pt-10 sm:justify-center sm:pt-0",
           )}
         >
           <SearchField
@@ -388,7 +388,7 @@ export default function App() {
                   open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
-                <AnimatePresence initial={false}>
+                <AnimatePresence initial={false} mode="popLayout">
                   {groups.map((group, position) => (
                     <motion.div
                       key={group.key}
@@ -643,6 +643,16 @@ function confirmLabel(confirm: Confirm) {
 
 /** A vault with nothing in it should say what to do, not shrug — and the way to
  *  start writing belongs here, not inside a panel you have to know about. */
+const emptyVault = (desktop: boolean) =>
+  desktop
+    ? "Vault vazio. Comece uma nota, ou arraste um print para esta janela."
+    : "Vault vazio. Comece uma nota, ou mande uma foto pelo +."
+
+const howToAdd = (desktop: boolean) =>
+  desktop
+    ? "Digite para buscar. Prints entram arrastando ou com Cmd+V dentro de uma nota."
+    : "Digite para buscar. Fotos entram pelo + aqui embaixo."
+
 function EmptyState({
   vault,
   dropping,
@@ -664,9 +674,7 @@ function EmptyState({
       )}
     >
       <p className="text-sm text-muted-foreground">
-        {empty
-          ? "Vault vazio. Comece uma nota, ou arraste um print para esta janela."
-          : "Digite para buscar. Prints entram arrastando ou com Cmd+V dentro de uma nota."}
+        {empty ? emptyVault(isDesktop) : howToAdd(isDesktop)}
       </p>
 
       <div className="mt-4 flex justify-center gap-2">
@@ -688,7 +696,9 @@ function EmptyState({
         </button>
       </div>
 
-      {vault && <p className="mt-4 font-mono text-xs text-muted-foreground">{vault.root}</p>}
+      {vault && isDesktop && (
+        <p className="mt-4 font-mono text-xs text-muted-foreground">{vault.root}</p>
+      )}
     </div>
   )
 }

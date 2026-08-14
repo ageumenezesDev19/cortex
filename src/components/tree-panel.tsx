@@ -1,14 +1,4 @@
-import {
-  ChevronDown,
-  ChevronRight,
-  FilePlus,
-  FileText,
-  FolderPlus,
-  Image as ImageIcon,
-  Pencil,
-  Trash2,
-  X,
-} from "lucide-react"
+import { ChevronDown, ChevronLeft, ChevronRight, FilePlus, FileText, FolderPlus, Image as ImageIcon, Pencil, Trash2, X } from "lucide-react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useState } from "react"
 
@@ -54,9 +44,19 @@ export function TreePanel({
           animate={{ opacity: 1, x: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
           transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }}
-          className="fixed inset-0 z-40 flex w-full flex-col border-r bg-card sm:static sm:z-auto sm:w-64 sm:shrink-0"
+          className="fixed inset-x-0 top-0 bottom-[var(--rail)] z-40 flex w-full flex-col border-r bg-card sm:static sm:bottom-auto sm:z-auto sm:w-64 sm:shrink-0"
         >
           <header className="flex items-center justify-between border-b px-3 py-2">
+            {/* On a phone the panel is a screen, and a screen is left by a
+                button you can hit, not by a 16 px cross in the corner. */}
+            <button
+              type="button"
+              onClick={onClose}
+              className="-ml-1 flex h-11 items-center gap-1 rounded-md pl-1 pr-2 text-sm text-muted-foreground transition-colors hover:text-foreground sm:hidden"
+            >
+              <ChevronLeft className="size-5" aria-hidden />
+              voltar
+            </button>
             <h2 className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
               Vault
             </h2>
@@ -71,7 +71,9 @@ export function TreePanel({
                 label="Nova pasta na raiz"
                 onClick={() => onCreateFolder("")}
               />
-              <IconButton icon={X} label="Fechar vault" onClick={onClose} />
+              <span className="hidden sm:block">
+                <IconButton icon={X} label="Fechar vault" onClick={onClose} />
+              </span>
             </div>
           </header>
 
@@ -145,10 +147,10 @@ function Node({
           ) : (
             Icon && <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           )}
-          <span className="truncate">{entry.name}</span>
+          <span className="min-w-0 truncate">{entry.name}</span>
         </button>
 
-        <span className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <span className="flex shrink-0 items-center transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
           {isFolder && (
             <>
               <IconButton
