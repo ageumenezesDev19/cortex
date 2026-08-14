@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "ocr": "./scripts/build-ocr.sh",
+    "icon": "node scripts/build-icon.mjs && tauri icon icon/cortex-1024.png",
     "app": "npm run ocr && tauri dev",
     "app:build": "npm run ocr && tauri build",
     "check:markdown": "esbuild scripts/check-markdown.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/check-markdown.mjs --log-level=error && node node_modules/.cache/check-markdown.mjs",
