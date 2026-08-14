@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core"
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 
 /**
@@ -6,7 +6,14 @@ import { listen } from "@tauri-apps/api/event"
  * Safari on the phone over the tailnet. Only this file knows the difference —
  * everything above it calls the same functions either way.
  */
-export const isDesktop = "__TAURI_INTERNALS__" in window
+const insideApp = () => isTauri() || "__TAURI_INTERNALS__" in window
+
+/**
+ * Asked on every call rather than decided once when this module loaded: if the
+ * window ever answers "browser" for a moment, every call goes to the dev server
+ * and the app comes up with an empty vault and dead buttons.
+ */
+export const isDesktop = insideApp()
 
 /**
  * `POST /api/<command>` carries exactly the arguments `invoke` would send, so a
@@ -26,7 +33,7 @@ async function post<T>(command: string, args: Record<string, unknown> = {}): Pro
 }
 
 const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
-  isDesktop ? call<T>(command, args) : post<T>(command, args)
+  insideApp() ? invoke<T>(command, args) : post<T>(command, args)
 
 /** `[x, y, width, height]`, normalised 0–1 with the origin at the top left. */
 export type Bbox = [number, number, number, number]
@@ -215,7 +222,7 @@ export const removeFromTopic = (slug: string, path: string) =>
  * comes down the same session as everything else.
  */
 export const assetUrl = (root: string, relativePath: string) =>
-  isDesktop ? convertFileSrc(`${root}/${relativePath}`) : `/asset/${encode(relativePath)}`
+  insideApp() ? convertFileSrc(`${root}/${relativePath}`) : `/asset/${encode(relativePath)}`
 
 const encode = (path: string) => path.split("/").map(encodeURIComponent).join("/")
 
@@ -251,7 +258,7 @@ export const serverAddress = () => invoke<ServerLink[]>("server_address")
  * on the phone there is nothing to report and nothing to stop.
  */
 export function onImportStatus(handler: (status: ImportStatus) => void): () => void {
-  if (!isDesktop) return () => {}
+  if (!insideApp()) return () => {}
   const stop = listen<ImportStatus>(IMPORT_EVENT, (event) => handler(event.payload))
   return () => void stop.then((off) => off())
 }
@@ -262,7 +269,7 @@ export function onImportStatus(handler: (status: ImportStatus) => void): () => v
  * time, so a slow poll says everything a listener would.
  */
 export function onIndexStatus(handler: (status: IndexStatus) => void): () => void {
-  if (isDesktop) {
+  if (insideApp()) {
     const stop = listen<IndexStatus>(INDEX_STATUS_EVENT, (event) => handler(event.payload))
     return () => void stop.then((off) => off())
   }
