@@ -99,6 +99,35 @@ export const getAsset = (path: string) => invoke<AssetContent>("get_asset", { pa
 
 export const listTree = () => invoke<TreeEntry[]>("list_tree")
 
+export const IMPORT_EVENT = "import:status"
+
+export type ImportPreview = {
+  notes: number
+  folders: number
+  /** Brought over in an earlier run; these get skipped. */
+  already: number
+}
+
+export type ImportReport = {
+  imported: number
+  skipped: number
+  failed: number
+  attachments: number
+}
+
+export type ImportStatus = {
+  phase: "running" | "done" | "failed"
+  done: number
+  total: number
+  current: string
+  report: ImportReport | null
+  error: string | null
+}
+
+export const importPreview = () => invoke<ImportPreview>("import_preview")
+
+export const importNotes = () => invoke<void>("import_notes")
+
 /** Where a note by this name probably belongs, judged by what the vault has. */
 export type Placement = {
   folder: string | null

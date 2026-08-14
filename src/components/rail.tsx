@@ -1,4 +1,4 @@
-import { FilePlus, FolderPlus, FolderTree, Layers, Monitor, Moon, Plus, Search, Sun } from "lucide-react"
+import { Download, FilePlus, FolderPlus, FolderTree, Layers, Monitor, Moon, Plus, Search, Sun } from "lucide-react"
 import { useState } from "react"
 
 import { cn } from "../lib/utils"
@@ -17,11 +17,13 @@ export function Rail({
   onTogglePanel,
   onNewNote,
   onNewFolder,
+  onImport,
 }: {
   panel: Panel
   onTogglePanel: (panel: Panel) => void
   onNewNote: () => void
   onNewFolder: () => void
+  onImport: () => void
 }) {
   const { theme, setTheme } = useTheme()
 
@@ -29,7 +31,7 @@ export function Rail({
     <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-card py-3">
       {/* Above the panels on purpose: creating has to be reachable from every
           screen, not from inside a panel you must know to open first. */}
-      <NewMenu onNewNote={onNewNote} onNewFolder={onNewFolder} />
+      <NewMenu onNewNote={onNewNote} onNewFolder={onNewFolder} onImport={onImport} />
       <span className="my-1 h-px w-6 bg-border" aria-hidden />
 
       <RailButton
@@ -66,7 +68,15 @@ export function Rail({
   )
 }
 
-function NewMenu({ onNewNote, onNewFolder }: { onNewNote: () => void; onNewFolder: () => void }) {
+function NewMenu({
+  onNewNote,
+  onNewFolder,
+  onImport,
+}: {
+  onNewNote: () => void
+  onNewFolder: () => void
+  onImport: () => void
+}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -103,6 +113,15 @@ function NewMenu({ onNewNote, onNewFolder }: { onNewNote: () => void; onNewFolde
               onClick={() => {
                 setOpen(false)
                 onNewFolder()
+              }}
+            />
+            <span className="my-0.5 h-px bg-border" aria-hidden />
+            <MenuItem
+              icon={Download}
+              label="Importar do Notes"
+              onClick={() => {
+                setOpen(false)
+                onImport()
               }}
             />
           </span>

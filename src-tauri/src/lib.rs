@@ -2,12 +2,13 @@ mod commands;
 mod db;
 mod files;
 pub mod html;
+pub mod import;
 mod index;
 mod ocr;
 mod parse;
 mod search;
 mod topics;
-mod vault;
+pub mod vault;
 mod watch;
 
 use std::sync::Mutex;
@@ -41,6 +42,8 @@ pub fn run() {
             commands::create_note,
             commands::suggest_placement,
             commands::get_asset,
+            commands::import_preview,
+            commands::import_notes,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

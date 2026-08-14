@@ -4,9 +4,10 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::files;
+use crate::import;
 use crate::search::{self, Group};
 use crate::topics::{self, Topic};
 use crate::vault;
@@ -364,4 +365,71 @@ pub fn remove_from_topic(
     topic.members.retain(|member| member != &path);
     topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
     Ok(topic)
+}
+
+// The Notes.app import. It reaches outside the vault, takes minutes, and reports
+// as it goes — so it runs on its own thread and talks through events, the same
+// shape the indexer already uses.
+
+pub const IMPORT_EVENT: &str = "import:status";
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreview {
+    pub notes: u32,
+    pub folders: u32,
+    /// Already brought over in an earlier run; these are skipped.
+    pub already: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportStatus {
+    phase: &'static str,
+    done: u32,
+    total: u32,
+    current: String,
+    report: Option<import::Report>,
+    error: Option<String>,
+}
+
+/// What an import would do, so the confirmation can say it out loud.
+#[tauri::command]
+pub fn import_preview(state: State<AppState>) -> Result<ImportPreview, String> {
+    let notes = import::list().map_err(|e| e.to_string())?;
+    let manifest = import::read_manifest(&state.root);
+
+    let mut folders: Vec<&str> = notes.iter().map(|note| note.folder.as_str()).collect();
+    folders.sort_unstable();
+    folders.dedup();
+
+    Ok(ImportPreview {
+        notes: notes.len() as u32,
+        folders: folders.iter().filter(|folder| !folder.is_empty()).count() as u32,
+        already: manifest.len() as u32,
+    })
+}
+
+#[tauri::command]
+pub fn import_notes(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let root = state.root.clone();
+
+    std::thread::spawn(move || {
+        let emit = |phase, done, total, current: &str, report, error| {
+            let _ = app.emit(
+                IMPORT_EVENT,
+                ImportStatus { phase, done, total, current: current.to_string(), report, error },
+            );
+        };
+
+        emit("running", 0, 0, "", None, None);
+        match import::run(&root, |done, total, name| {
+            emit("running", done, total, name, None, None);
+        }) {
+            Ok(report) => emit("done", report.imported, report.imported, "", Some(report), None),
+            Err(error) => emit("failed", 0, 0, "", None, Some(error.to_string())),
+        }
+    });
+
+    Ok(())
 }

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ConfirmDialog } from "./components/confirm-dialog"
 import { DropToast, type Dropped } from "./components/drop-toast"
+import { ImportPanel } from "./components/import-panel"
 import { CreateDialog } from "./components/create-dialog"
 import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
@@ -24,6 +25,9 @@ import {
   deleteEntry,
   deleteTopic,
   importImages,
+  IMPORT_EVENT,
+  importNotes,
+  importPreview,
   INDEX_STATUS_EVENT,
   listTopics,
   listTree,
@@ -32,6 +36,8 @@ import {
   vaultStatus,
   type Group,
   type Hit,
+  type ImportPreview,
+  type ImportStatus,
   type IndexStatus,
   type Topic,
   type TreeEntry,
@@ -84,6 +90,9 @@ export default function App() {
   const [dropped, setDropped] = useState<Dropped | null>(null)
   // Set only when a note is being created out of a dropped screenshot.
   const [embedding, setEmbedding] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [preview, setPreview] = useState<ImportPreview | null>(null)
+  const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
   const reduceMotion = useReducedMotion()
   const results = useRef<HTMLDivElement>(null)
@@ -113,8 +122,12 @@ export default function App() {
     refreshTree()
 
     const unlisten = listen<IndexStatus>(INDEX_STATUS_EVENT, (event) => setStatus(event.payload))
+    const unlistenImport = listen<ImportStatus>(IMPORT_EVENT, (event) =>
+      setImportStatus(event.payload),
+    )
     return () => {
       unlisten.then((stop) => stop())
+      unlistenImport.then((stop) => stop())
     }
   }, [refreshTopics, refreshTree])
 
@@ -220,7 +233,7 @@ export default function App() {
    */
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || ask || confirm || creating !== null) return
+      if (event.key !== "Escape" || ask || confirm || creating !== null || importing) return
       const active = document.activeElement as HTMLElement | null
 
       if (active?.closest("[data-note-surface]")) {
@@ -244,7 +257,7 @@ export default function App() {
 
     window.addEventListener("keydown", onEscape)
     return () => window.removeEventListener("keydown", onEscape)
-  }, [ask, confirm, creating, open, query, topic, panel, changeQuery, clearTopic])
+  }, [ask, confirm, creating, importing, open, query, topic, panel, changeQuery, clearTopic])
 
   useEffect(() => {
     const onNew = (event: KeyboardEvent) => {
@@ -288,6 +301,14 @@ export default function App() {
         onTogglePanel={(next) => setPanel((current) => (current === next ? "none" : next))}
         onNewNote={() => setCreating("")}
         onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
+        onImport={() => {
+          setImporting(true)
+          setImportStatus(null)
+          setPreview(null)
+          importPreview()
+            .then(setPreview)
+            .catch(() => {})
+        }}
       />
 
       <TopicsPanel
@@ -454,6 +475,19 @@ export default function App() {
             })
             .catch(() => {})
           setAsk(null)
+        }}
+      />
+
+      <ImportPanel
+        open={importing}
+        preview={preview}
+        status={importStatus}
+        onCancel={() => {
+          setImporting(false)
+          setImportStatus(null)
+        }}
+        onStart={() => {
+          importNotes().catch(() => {})
         }}
       />
 
