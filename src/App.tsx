@@ -81,6 +81,7 @@ export default function App() {
 
   const reduceMotion = useReducedMotion()
   const results = useRef<HTMLDivElement>(null)
+  const searchField = useRef<HTMLInputElement>(null)
 
   // Keyboard navigation runs over every passage on screen; it must not know
   // that the list is grouped.
@@ -194,6 +195,39 @@ export default function App() {
     setOpen((current) => (current?.from === "tree" ? current : null))
   }, [query])
 
+  /**
+   * One ladder for Escape, innermost first, registered on the window so it also
+   * answers with the cursor inside a note. Dialogs handle their own Escape, so
+   * this stands down while one is up.
+   */
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || ask || confirm) return
+      const active = document.activeElement as HTMLElement | null
+
+      if (active?.closest("[data-note-surface]")) {
+        active.blur()
+        setOpen(null)
+      } else if (open) {
+        setOpen(null)
+      } else if (query.length > 0) {
+        changeQuery("")
+      } else if (topic) {
+        clearTopic()
+      } else if (panel !== "none") {
+        setPanel("none")
+      } else {
+        return
+      }
+
+      event.preventDefault()
+      searchField.current?.focus()
+    }
+
+    window.addEventListener("keydown", onEscape)
+    return () => window.removeEventListener("keydown", onEscape)
+  }, [ask, confirm, open, query, topic, panel, changeQuery, clearTopic])
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault()
@@ -207,12 +241,8 @@ export default function App() {
     } else if (event.key === "Backspace" && query.length === 0 && topic) {
       event.preventDefault()
       clearTopic()
-    } else if (event.key === "Escape") {
-      event.preventDefault()
-      if (open) setOpen(null)
-      else if (query.length > 0) changeQuery("")
-      else clearTopic()
     }
+    // Escape is handled on the window, so it answers from inside a note too.
   }
 
   const browsing = query.trim().length > 0 || topic !== null
@@ -266,6 +296,7 @@ export default function App() {
           )}
         >
           <SearchField
+            inputRef={searchField}
             value={query}
             onChange={changeQuery}
             onKeyDown={onKeyDown}

@@ -1,11 +1,13 @@
 import { Search, X } from "lucide-react"
-import { useEffect, useRef } from "react"
+import { useEffect } from "react"
 
 import type { Topic } from "../lib/api"
 import { cn } from "../lib/utils"
 import { BrandIcon } from "./brand-icon"
 
 type Props = {
+  /** Held by the app so Escape can hand focus back from anywhere. */
+  inputRef: React.RefObject<HTMLInputElement | null>
   value: string
   onChange: (value: string) => void
   onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void
@@ -20,6 +22,7 @@ type Props = {
  * programmer" before any copy gets the chance to.
  */
 export function SearchField({
+  inputRef,
   value,
   onChange,
   onKeyDown,
@@ -27,11 +30,9 @@ export function SearchField({
   topic,
   onClearTopic,
 }: Props) {
-  const input = useRef<HTMLInputElement>(null)
-
   useEffect(() => {
-    input.current?.focus()
-  }, [])
+    inputRef.current?.focus()
+  }, [inputRef])
 
   return (
     <label
@@ -62,7 +63,7 @@ export function SearchField({
       )}
 
       <input
-        ref={input}
+        ref={inputRef}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}

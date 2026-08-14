@@ -74,3 +74,65 @@
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
+
+@layer components {
+  /*
+   * The editable note. It carries no focus ring of its own — the caret is the
+   * focus indicator here, the same way it is in any text you write into.
+   */
+  .cortex-prose {
+    @apply px-1 pb-8 outline-none;
+  }
+
+  .cortex-prose h1 {
+    @apply mb-3 mt-2 text-2xl font-semibold;
+  }
+  .cortex-prose h2 {
+    @apply mb-2 mt-6 text-lg font-semibold;
+  }
+  .cortex-prose h3 {
+    @apply mb-2 mt-4 font-medium;
+  }
+  .cortex-prose h4,
+  .cortex-prose h5,
+  .cortex-prose h6 {
+    @apply mb-1 mt-3 text-sm font-medium;
+  }
+
+  .cortex-prose p {
+    @apply my-2 leading-relaxed;
+  }
+  .cortex-prose ul {
+    @apply my-2 list-disc space-y-1 pl-5;
+  }
+  .cortex-prose ol {
+    @apply my-2 list-decimal space-y-1 pl-5;
+  }
+  .cortex-prose blockquote {
+    @apply my-3 border-l-2 pl-3 text-muted-foreground;
+  }
+  .cortex-prose hr {
+    @apply my-5 border-t;
+  }
+  .cortex-prose a {
+    @apply text-found underline underline-offset-2;
+  }
+  .cortex-prose img {
+    @apply my-3 max-w-full rounded-md border;
+  }
+
+  .cortex-prose code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+  }
+  .cortex-prose pre {
+    @apply my-3 overflow-x-auto rounded-md border bg-muted/50 p-3 font-mono text-xs leading-relaxed;
+  }
+  .cortex-prose pre code {
+    @apply bg-transparent p-0;
+  }
+
+  /* Where the search landed. Cleared the moment the cursor enters the text. */
+  .cortex-found {
+    @apply rounded-md bg-found/10 px-2 shadow-[inset_0_0_0_1px_hsl(var(--found))];
+  }
+}
