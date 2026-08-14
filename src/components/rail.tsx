@@ -48,7 +48,10 @@ export function Rail({
     // padding at the end is the home indicator on an iPhone.
     <nav
       className={cn(
-        "flex shrink-0 items-center gap-1 border-t bg-card px-2 py-1",
+        // Above the content, and above it by more than a tie: the sticky search
+        // field is later in the DOM, so at the same z-index it won and painted
+        // over the menu that opens out of this bar.
+        "relative z-30 flex shrink-0 items-center gap-1 border-t bg-card px-2 py-1",
         "sm:w-12 sm:flex-col sm:border-r sm:border-t-0 sm:px-0 sm:py-3",
       )}
       style={{ paddingBottom: "max(0.25rem, env(safe-area-inset-bottom))" }}
