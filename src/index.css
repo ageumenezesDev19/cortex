@@ -32,6 +32,9 @@
     --found: 38 92% 50%;
     --found-foreground: 222 49% 10%;
 
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
     --radius: 0.5rem;
   }
 
@@ -52,6 +55,9 @@
     --border: 222 28% 19%;
     --input: 222 28% 19%;
     --ring: 213 45% 72%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
   }
 
   * {

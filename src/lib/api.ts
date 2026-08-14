@@ -33,10 +33,25 @@ export type Group = {
   hits: Hit[]
 }
 
+/** A heading-delimited slice of the raw source, as the index sees it. */
+export type ChunkRange = {
+  headingPath: string
+  start: number
+  end: number
+}
+
 export type NoteContent = {
   path: string
   title: string
   source: string
+  chunks: ChunkRange[]
+}
+
+export type TreeEntry = {
+  path: string
+  name: string
+  kind: "folder" | "note" | "image"
+  children: TreeEntry[]
 }
 
 export type VaultStatus = {
@@ -71,6 +86,26 @@ export const getNote = (path: string) => invoke<NoteContent>("get_note", { path 
 export const vaultStatus = () => invoke<VaultStatus>("vault_status")
 
 export const importImages = (paths: string[]) => invoke<number>("import_images", { paths })
+
+export const listTree = () => invoke<TreeEntry[]>("list_tree")
+
+export const createNote = (folder: string, title: string) =>
+  invoke<string>("create_note", { folder, title })
+
+export const writeNote = (path: string, source: string) =>
+  invoke<void>("write_note", { path, source })
+
+export const createFolder = (parent: string, name: string) =>
+  invoke<string>("create_folder", { parent, name })
+
+export const renameEntry = (path: string, name: string) =>
+  invoke<string>("rename_entry", { path, name })
+
+export const deleteEntry = (path: string) => invoke<void>("delete_entry", { path })
+
+/** Returns the markdown link to drop at the cursor. */
+export const pasteImage = (notePath: string, bytes: number[], extension: string) =>
+  invoke<string>("paste_image", { notePath, bytes, extension })
 
 export const listTopics = () => invoke<Topic[]>("list_topics")
 

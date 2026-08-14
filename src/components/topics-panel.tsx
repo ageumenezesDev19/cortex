@@ -14,7 +14,8 @@ type Props = {
   onClose: () => void
   onPick: (topic: Topic) => void
   onCreate: (name: string, icon: string | null, color: string | null) => void
-  onDelete: (slug: string) => void
+  /** Hands the whole topic over: the confirmation names it before it goes. */
+  onDelete: (topic: Topic) => void
 }
 
 /**
@@ -88,7 +89,7 @@ export function TopicsPanel({
 
                 <button
                   type="button"
-                  onClick={() => onDelete(topic.slug)}
+                  onClick={() => onDelete(topic)}
                   aria-label={`Apagar ${topic.name}`}
                   className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
                 >

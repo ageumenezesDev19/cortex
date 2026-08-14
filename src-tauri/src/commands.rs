@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::State;
 
+use crate::files;
 use crate::search::{self, Group};
 use crate::topics::{self, Topic};
 use crate::vault;
@@ -16,10 +17,19 @@ pub struct AppState {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChunkRange {
+    pub heading_path: String,
+    pub start: i64,
+    pub end: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NoteContent {
     pub path: String,
     pub title: String,
     pub source: String,
+    pub chunks: Vec<ChunkRange>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,19 +55,29 @@ pub fn search(
 
 #[tauri::command]
 pub fn get_note(state: State<AppState>, path: String) -> Result<NoteContent, String> {
-    let abs = vault::absolute(&state.root, &path);
-    if !abs.starts_with(&state.root) {
-        return Err("path outside the vault".into());
-    }
+    let abs = vault::resolve(&state.root, &path).map_err(|e| e.to_string())?;
     let source = std::fs::read_to_string(&abs).map_err(|e| e.to_string())?;
     let stem = abs
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| path.clone());
+
+    // The same chunk boundaries the index was built from, so the reader can jump
+    // to a passage in rendered mode where byte offsets mean nothing.
+    let chunks = crate::parse::chunk_markdown(&source)
+        .into_iter()
+        .map(|chunk| ChunkRange {
+            heading_path: chunk.heading_path,
+            start: chunk.start as i64,
+            end: chunk.end as i64,
+        })
+        .collect();
+
     Ok(NoteContent {
         title: crate::parse::title_of(&source, &stem),
         path,
         source,
+        chunks,
     })
 }
 
@@ -104,9 +124,63 @@ pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<u32, 
     Ok(copied)
 }
 
-// Topic commands write manifests and nothing else. The watcher sees the change
-// and refreshes the database mirror, so there is exactly one path into the
-// index no matter who made the edit — the app or the editor.
+// Everything below writes to disk and stops there. The watcher notices and
+// reindexes, so there is exactly one path into the index no matter who made the
+// edit — this app, or an editor someone happens to have open on the side.
+
+#[tauri::command]
+pub fn list_tree(state: State<AppState>) -> Result<Vec<vault::TreeEntry>, String> {
+    vault::tree(&state.root).map_err(|e| e.to_string())
+}
+
+/// Returns the path of the new note so the caller can open it straight away.
+#[tauri::command]
+pub fn create_note(
+    state: State<AppState>,
+    folder: String,
+    title: String,
+) -> Result<String, String> {
+    files::create_note(&state.root, &folder, &title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn write_note(state: State<AppState>, path: String, source: String) -> Result<(), String> {
+    files::write_note(&state.root, &path, &source).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_folder(
+    state: State<AppState>,
+    parent: String,
+    name: String,
+) -> Result<String, String> {
+    files::create_folder(&state.root, &parent, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn rename_entry(state: State<AppState>, path: String, name: String) -> Result<String, String> {
+    let new_path = files::rename(&state.root, &path, &name).map_err(|e| e.to_string())?;
+    topics::retarget(&state.root, &path, Some(&new_path)).map_err(|e| e.to_string())?;
+    Ok(new_path)
+}
+
+#[tauri::command]
+pub fn delete_entry(state: State<AppState>, path: String) -> Result<(), String> {
+    files::delete(&state.root, &path).map_err(|e| e.to_string())?;
+    topics::retarget(&state.root, &path, None).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn paste_image(
+    state: State<AppState>,
+    note_path: String,
+    bytes: Vec<u8>,
+    extension: String,
+) -> Result<String, String> {
+    files::paste_image(&state.root, &note_path, &bytes, &extension).map_err(|e| e.to_string())
+}
+
+// Topic commands write manifests and nothing else, for the same reason.
 
 #[tauri::command]
 pub fn list_topics(state: State<AppState>) -> Result<Vec<Topic>, String> {

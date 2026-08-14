@@ -9,26 +9,37 @@ const THEMES: { value: Theme; icon: typeof Sun; label: string }[] = [
   { value: "system", icon: Monitor, label: "Seguir o sistema" },
 ]
 
-/** The folder tree arrives in M6; it sits here disabled so the shape holds. */
+export type Panel = "none" | "topics" | "tree"
+
 export function Rail({
-  topicsOpen,
-  onToggleTopics,
+  panel,
+  onTogglePanel,
 }: {
-  topicsOpen: boolean
-  onToggleTopics: () => void
+  panel: Panel
+  onTogglePanel: (panel: Panel) => void
 }) {
   const { theme, setTheme } = useTheme()
 
   return (
     <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-card py-3">
-      <RailButton icon={Search} label="Buscar" active={!topicsOpen} />
+      <RailButton
+        icon={Search}
+        label="Buscar"
+        active={panel === "none"}
+        onClick={() => onTogglePanel("none")}
+      />
       <RailButton
         icon={Layers}
         label="Tópicos"
-        active={topicsOpen}
-        onClick={onToggleTopics}
+        active={panel === "topics"}
+        onClick={() => onTogglePanel("topics")}
       />
-      <RailButton icon={FolderTree} label="Pastas (em breve)" disabled />
+      <RailButton
+        icon={FolderTree}
+        label="Vault"
+        active={panel === "tree"}
+        onClick={() => onTogglePanel("tree")}
+      />
 
       <div className="mt-auto flex flex-col gap-1">
         {THEMES.map(({ value, icon, label }) => (
@@ -49,13 +60,11 @@ function RailButton({
   icon: Icon,
   label,
   active = false,
-  disabled = false,
   onClick,
 }: {
   icon: typeof Sun
   label: string
   active?: boolean
-  disabled?: boolean
   onClick?: () => void
 }) {
   return (
@@ -64,12 +73,10 @@ function RailButton({
       title={label}
       aria-label={label}
       aria-pressed={active}
-      disabled={disabled}
       onClick={onClick}
       className={cn(
         "flex size-8 items-center justify-center rounded-md transition-colors",
         active ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-        disabled && "cursor-not-allowed opacity-40 hover:text-muted-foreground",
       )}
     >
       <Icon className="size-4" aria-hidden />

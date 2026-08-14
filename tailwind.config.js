@@ -31,6 +31,11 @@ export default {
           DEFAULT: "hsl(var(--found))",
           foreground: "hsl(var(--found-foreground))",
         },
+        /* Only for the button that actually destroys something. */
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

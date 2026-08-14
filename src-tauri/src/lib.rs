@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod files;
 mod index;
 mod ocr;
 mod parse;
@@ -35,6 +36,13 @@ pub fn run() {
             commands::get_note,
             commands::vault_status,
             commands::import_images,
+            commands::list_tree,
+            commands::create_note,
+            commands::write_note,
+            commands::create_folder,
+            commands::rename_entry,
+            commands::delete_entry,
+            commands::paste_image,
             commands::list_topics,
             commands::create_topic,
             commands::update_topic,

@@ -1,6 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 
 pub const VAULT_DIR: &str = "Cortex";
 pub const INDEX_DIR: &str = ".index";
@@ -86,6 +87,126 @@ pub fn absolute(root: &Path, relative: &str) -> PathBuf {
     root.join(relative)
 }
 
+/// The single gate every write goes through. Checked lexically rather than by
+/// canonicalising, because the file being created does not exist yet — and a
+/// `..` has to be refused before it is ever joined to the root.
+pub fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
+    let candidate = Path::new(relative);
+    if candidate.is_absolute() {
+        return Err(anyhow!("caminho absoluto não é aceito"));
+    }
+    for component in candidate.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => return Err(anyhow!("caminho sai do vault: {relative}")),
+        }
+    }
+    Ok(root.join(candidate))
+}
+
+/// File names have to survive git, the Finder and a URL one day, so accents are
+/// folded rather than escaped.
+pub fn slugify(name: &str) -> String {
+    let mut slug = String::new();
+    for character in name.trim().to_lowercase().chars() {
+        let folded = fold(character);
+        if folded.is_alphanumeric() {
+            slug.push(folded);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn fold(character: char) -> char {
+    match character {
+        'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' => 'u',
+        'ç' => 'c',
+        'ñ' => 'n',
+        other => other,
+    }
+}
+
+/// A name typed by a person becomes a file name. Separators would silently
+/// create folders, and a leading dot would hide the note from the indexer.
+pub fn safe_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("o nome não pode ficar vazio"));
+    }
+    if trimmed.starts_with('.') {
+        return Err(anyhow!("o nome não pode começar com ponto"));
+    }
+    if trimmed.contains(['/', '\\', ':']) {
+        return Err(anyhow!("o nome não pode conter / \\ ou :"));
+    }
+    Ok(trimmed.to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct TreeEntry {
+    pub path: String,
+    pub name: String,
+    /// `folder`, `note` or `image`.
+    pub kind: String,
+    pub children: Vec<TreeEntry>,
+}
+
+pub fn tree(root: &Path) -> Result<Vec<TreeEntry>> {
+    read_level(root, root)
+}
+
+fn read_level(root: &Path, dir: &Path) -> Result<Vec<TreeEntry>> {
+    let mut entries: Vec<TreeEntry> = Vec::new();
+
+    for entry in std::fs::read_dir(dir)?.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if is_ignored(root, &path) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        let kind = if is_dir {
+            "folder"
+        } else if is_markdown(&path) {
+            "note"
+        } else if is_image(&path) {
+            "image"
+        } else {
+            // The `.ocr.json` sidecars are ours, not the user's — they belong to
+            // the image they sit beside, not to the tree.
+            continue;
+        };
+
+        entries.push(TreeEntry {
+            path: relative(root, &path)?,
+            name,
+            kind: kind.to_string(),
+            children: if is_dir {
+                read_level(root, &path)?
+            } else {
+                Vec::new()
+            },
+        });
+    }
+
+    entries.sort_by(|a, b| match (a.kind.as_str(), b.kind.as_str()) {
+        ("folder", "folder") | (_, _) if a.kind == b.kind => {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        }
+        ("folder", _) => std::cmp::Ordering::Less,
+        (_, "folder") => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(entries)
+}
+
 pub fn folder_of(relative: &str) -> String {
     match relative.rsplit_once('/') {
         Some((folder, _)) => folder.to_string(),
@@ -118,3 +239,42 @@ pesquisável — buscar por uma palavra que só existe dentro da imagem funciona
 Em `.index/cortex.db`. Ele é derivado e descartável: apagar a pasta faz o app
 reconstruir tudo na próxima abertura.
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> PathBuf {
+        PathBuf::from("/tmp/vault")
+    }
+
+    #[test]
+    fn refuses_paths_that_climb_out_of_the_vault() {
+        assert!(resolve(&root(), "../fora.md").is_err());
+        assert!(resolve(&root(), "notas/../../fora.md").is_err());
+        assert!(resolve(&root(), "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn accepts_ordinary_paths_inside_the_vault() {
+        assert_eq!(
+            resolve(&root(), "react/hooks.md").unwrap(),
+            root().join("react/hooks.md")
+        );
+    }
+
+    #[test]
+    fn rejects_names_that_would_become_folders_or_hide_the_file() {
+        assert!(safe_name("react/hooks").is_err());
+        assert!(safe_name(".oculta").is_err());
+        assert!(safe_name("   ").is_err());
+        assert_eq!(safe_name("  Server Actions  ").unwrap(), "Server Actions");
+    }
+
+    #[test]
+    fn folds_accents_and_collapses_separators() {
+        assert_eq!(slugify("Programação   Funcional"), "programacao-funcional");
+        assert_eq!(slugify("Next.js"), "next-js");
+        assert_eq!(slugify("!!! C# !!!"), "c");
+    }
+}

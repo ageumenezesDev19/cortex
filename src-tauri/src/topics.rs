@@ -126,47 +126,100 @@ pub fn sync_to_db(conn: &mut Connection, topics: &[Topic]) -> Result<()> {
     Ok(())
 }
 
-/// File names have to survive git, Finder and a URL one day, so accents are
-/// folded rather than escaped.
-pub fn slugify(name: &str) -> String {
-    let mut slug = String::new();
-    for character in name.trim().to_lowercase().chars() {
-        let folded = fold(character);
-        if folded.is_alphanumeric() {
-            slug.push(folded);
-        } else if !slug.ends_with('-') {
-            slug.push('-');
+pub use crate::vault::slugify;
+
+/// Keeps topic membership honest when a note is renamed or deleted. A manifest
+/// pointing at a path that no longer exists rots in silence, which is the worst
+/// kind of bug — the topic simply gets quieter over time.
+///
+/// `to` of `None` means the target is gone. Folder paths carry their children,
+/// so a prefix match is part of the contract, not a convenience.
+pub fn retarget(root: &Path, from: &str, to: Option<&str>) -> Result<()> {
+    let prefix = format!("{from}/");
+
+    for mut topic in load_all(root)? {
+        let mut changed = false;
+        let mut members = Vec::with_capacity(topic.members.len());
+
+        for member in &topic.members {
+            let rewritten = if member == from {
+                to.map(str::to_string)
+            } else if let Some(rest) = member.strip_prefix(&prefix) {
+                to.map(|to| format!("{to}/{rest}"))
+            } else {
+                Some(member.clone())
+            };
+
+            match rewritten {
+                Some(path) => {
+                    changed |= &path != member;
+                    members.push(path);
+                }
+                None => changed = true,
+            }
+        }
+
+        if changed {
+            topic.members = members;
+            save(root, &topic)?;
         }
     }
-    slug.trim_matches('-').to_string()
-}
-
-fn fold(character: char) -> char {
-    match character {
-        'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
-        'é' | 'è' | 'ê' | 'ë' => 'e',
-        'í' | 'ì' | 'î' | 'ï' => 'i',
-        'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
-        'ú' | 'ù' | 'û' | 'ü' => 'u',
-        'ç' => 'c',
-        'ñ' => 'n',
-        other => other,
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::*;
 
-    #[test]
-    fn folds_accents_and_collapses_separators() {
-        assert_eq!(slugify("Programação   Funcional"), "programacao-funcional");
-        assert_eq!(slugify("Next.js"), "next-js");
-        assert_eq!(slugify("  React  "), "react");
+    fn vault_with_topic(members: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        save(
+            dir.path(),
+            &Topic {
+                slug: "react".into(),
+                name: "React".into(),
+                icon: None,
+                color: None,
+                members: members.iter().map(|m| m.to_string()).collect(),
+            },
+        )
+        .unwrap();
+        dir
     }
 
     #[test]
-    fn never_produces_a_leading_or_trailing_dash() {
-        assert_eq!(slugify("!!! C# !!!"), "c");
+    fn renaming_a_note_follows_it_into_the_manifest() {
+        let dir = vault_with_topic(&["react/hooks.md", "next/actions.md"]);
+        retarget(dir.path(), "react/hooks.md", Some("react/ganchos.md")).unwrap();
+
+        let topic = load(dir.path(), "react").unwrap();
+        assert_eq!(topic.members, ["react/ganchos.md", "next/actions.md"]);
+    }
+
+    #[test]
+    fn renaming_a_folder_carries_its_children() {
+        let dir = vault_with_topic(&["react/hooks.md", "react/_assets/print.png"]);
+        retarget(dir.path(), "react", Some("reactjs")).unwrap();
+
+        let topic = load(dir.path(), "react").unwrap();
+        assert_eq!(topic.members, ["reactjs/hooks.md", "reactjs/_assets/print.png"]);
+    }
+
+    #[test]
+    fn deleting_a_note_drops_it_from_the_manifest() {
+        let dir = vault_with_topic(&["react/hooks.md", "next/actions.md"]);
+        retarget(dir.path(), "react/hooks.md", None).unwrap();
+
+        let topic = load(dir.path(), "react").unwrap();
+        assert_eq!(topic.members, ["next/actions.md"]);
+    }
+
+    #[test]
+    fn an_unrelated_rename_rewrites_nothing() {
+        let dir = vault_with_topic(&["react/hooks.md"]);
+        retarget(dir.path(), "outro/arquivo.md", Some("outro/novo.md")).unwrap();
+
+        let topic = load(dir.path(), "react").unwrap();
+        assert_eq!(topic.members, ["react/hooks.md"]);
     }
 }
