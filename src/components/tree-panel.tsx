@@ -54,7 +54,7 @@ export function TreePanel({
           animate={{ opacity: 1, x: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
           transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }}
-          className="flex w-64 shrink-0 flex-col border-r bg-card"
+          className="fixed inset-0 z-40 flex w-full flex-col border-r bg-card sm:static sm:z-auto sm:w-64 sm:shrink-0"
         >
           <header className="flex items-center justify-between border-b px-3 py-2">
             <h2 className="font-mono text-xs uppercase tracking-wide text-muted-foreground">

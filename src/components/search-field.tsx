@@ -31,7 +31,9 @@ export function SearchField({
   onClearTopic,
 }: Props) {
   useEffect(() => {
-    inputRef.current?.focus()
+    // Not on a phone: focusing on load throws the keyboard up over the screen
+    // before anyone asked to type.
+    if (window.matchMedia("(min-width: 640px)").matches) inputRef.current?.focus()
   }, [inputRef])
 
   return (
@@ -70,6 +72,12 @@ export function SearchField({
         placeholder={topic ? "filtrar neste tópico" : "buscar no vault"}
         spellCheck={false}
         autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        enterKeyHint="search"
+        // A search field, not a form: the phone shows "search" and no Go button
+        // that would reload the page.
+        type="search"
         aria-label="Buscar no vault"
         className={cn(
           "w-full bg-transparent font-mono text-foreground outline-none",

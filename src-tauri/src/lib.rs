@@ -1,3 +1,4 @@
+pub mod api;
 mod commands;
 mod db;
 mod files;
@@ -7,13 +8,14 @@ mod index;
 mod ocr;
 mod parse;
 mod search;
+mod serve;
 mod topics;
 pub mod vault;
 mod watch;
 
 use std::sync::Mutex;
 
-use commands::AppState;
+use api::AppState;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,7 +32,14 @@ pub fn run() {
                 conn: Mutex::new(conn),
                 root: root.clone(),
             });
-            watch::spawn(app.handle().clone(), root);
+            watch::spawn(app.handle().clone(), root.clone());
+            // Losing the web server must not take the window down with it.
+            match serve::spawn(root) {
+                Ok(token) => {
+                    app.manage(serve::Address::new(token));
+                }
+                Err(error) => eprintln!("[cortex] sem servidor web: {error:#}"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -44,6 +53,7 @@ pub fn run() {
             commands::get_asset,
             commands::import_preview,
             commands::import_notes,
+            commands::server_address,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

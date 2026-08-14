@@ -13,7 +13,8 @@
     "app": "npm run ocr && tauri dev",
     "app:build": "npm run ocr && tauri build",
     "check:markdown": "esbuild scripts/check-markdown.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/check-markdown.mjs --log-level=error && node node_modules/.cache/check-markdown.mjs",
-    "test": "npm run check:markdown && cd src-tauri && cargo test"
+    "test": "npm run check:markdown && cd src-tauri && cargo test",
+    "serve:remote": "node scripts/serve-tailscale.mjs"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.3.0",
@@ -32,6 +33,7 @@
     "prosemirror-schema-list": "^1.5.1",
     "prosemirror-state": "^1.4.4",
     "prosemirror-view": "^1.42.2",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "simple-icons": "^16.28.0",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

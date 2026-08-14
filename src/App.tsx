@@ -1,6 +1,5 @@
-import { listen } from "@tauri-apps/api/event"
-import { FilePlus, FolderPlus } from "lucide-react"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
+import { ArrowLeft, FilePlus, FolderPlus } from "lucide-react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
@@ -12,6 +11,7 @@ import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
 import { PromptDialog } from "./components/prompt-dialog"
 import { Rail } from "./components/rail"
+import { SharePanel } from "./components/share-panel"
 import { ResultGroup } from "./components/result-group"
 import { SearchField } from "./components/search-field"
 import { StatusBar } from "./components/status-bar"
@@ -25,12 +25,14 @@ import {
   deleteEntry,
   deleteTopic,
   importImages,
-  IMPORT_EVENT,
   importNotes,
+  uploadImage,
   importPreview,
-  INDEX_STATUS_EVENT,
+  isDesktop,
   listTopics,
   listTree,
+  onImportStatus,
+  onIndexStatus,
   renameEntry,
   search,
   vaultStatus,
@@ -91,6 +93,8 @@ export default function App() {
   // Set only when a note is being created out of a dropped screenshot.
   const [embedding, setEmbedding] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const photo = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
@@ -121,13 +125,11 @@ export default function App() {
     refreshTopics()
     refreshTree()
 
-    const unlisten = listen<IndexStatus>(INDEX_STATUS_EVENT, (event) => setStatus(event.payload))
-    const unlistenImport = listen<ImportStatus>(IMPORT_EVENT, (event) =>
-      setImportStatus(event.payload),
-    )
+    const stopStatus = onIndexStatus(setStatus)
+    const stopImport = onImportStatus(setImportStatus)
     return () => {
-      unlisten.then((stop) => stop())
-      unlistenImport.then((stop) => stop())
+      stopStatus()
+      stopImport()
     }
   }, [refreshTopics, refreshTree])
 
@@ -149,6 +151,9 @@ export default function App() {
   // Screenshots dropped on the window land in the vault; the watcher takes it
   // from there, exactly as if they had been saved from the Finder.
   useEffect(() => {
+    // Dragging a file onto the window is a desktop gesture; the phone sends a
+    // photo through the picker instead.
+    if (!isDesktop) return
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "over") return setDropping(true)
       if (event.payload.type === "leave") return setDropping(false)
@@ -295,12 +300,14 @@ export default function App() {
   const openPath = open?.path ?? null
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-dvh flex-col-reverse overflow-hidden bg-background sm:h-screen sm:flex-row">
       <Rail
         panel={panel}
         onTogglePanel={(next) => setPanel((current) => (current === next ? "none" : next))}
         onNewNote={() => setCreating("")}
         onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
+        onShare={() => setSharing(true)}
+        onSendPhoto={() => photo.current?.click()}
         onImport={() => {
           setImporting(true)
           setImportStatus(null)
@@ -348,7 +355,7 @@ export default function App() {
           layout={!reduceMotion}
           transition={transition}
           className={cn(
-            "mx-auto w-full max-w-3xl px-6",
+            "mx-auto w-full max-w-3xl px-4 sm:px-6",
             browsing || open ? "pt-6" : "flex flex-1 flex-col justify-center",
           )}
         >
@@ -372,13 +379,13 @@ export default function App() {
         </motion.div>
 
         {(browsing || open) && (
-          <div className="flex min-h-0 flex-1 gap-4 px-6 pb-4 pt-4">
+          <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4 pt-4 sm:px-6">
             {browsing && (
               <div
                 ref={results}
                 className={cn(
                   "min-h-0 space-y-3 overflow-y-auto",
-                  open ? "w-[24rem] shrink-0" : "mx-auto w-full max-w-3xl",
+                  open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
                 <AnimatePresence initial={false}>
@@ -424,7 +431,17 @@ export default function App() {
             )}
 
             {open && (
-              <div className="min-h-0 min-w-0 flex-1 rounded-lg border bg-card p-4">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border bg-card p-3 sm:p-4">
+                {/* Esc does this on the desktop; a phone has no Esc. */}
+                <button
+                  type="button"
+                  onClick={() => setOpen(null)}
+                  className="mb-2 flex items-center gap-1.5 self-start rounded-md py-1 pr-2 text-sm text-muted-foreground sm:hidden"
+                >
+                  <ArrowLeft className="size-4" aria-hidden />
+                  voltar
+                </button>
+                <div className="min-h-0 min-w-0 flex-1">
                 {open.kind === "image" ? (
                   <ImageReader
                     key={open.path}
@@ -441,6 +458,7 @@ export default function App() {
                     root={vault?.root ?? ""}
                   />
                 )}
+                </div>
               </div>
             )}
           </div>
@@ -448,6 +466,26 @@ export default function App() {
 
         <StatusBar vault={vault} status={status} />
       </div>
+
+      {/* The phone's own picker, which on iOS offers the camera as well. The
+          photo lands in the vault and the watcher reads it, exactly as a
+          screenshot dropped on the window does. */}
+      <input
+        ref={photo}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ""
+          if (!file) return
+          uploadImage(file)
+            .then((path) => setDropped({ path, read: false }))
+            .catch(() => {})
+        }}
+      />
+
+      <SharePanel open={sharing} onClose={() => setSharing(false)} />
 
       <PromptDialog
         open={ask !== null}
