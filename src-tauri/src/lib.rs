@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod files;
+pub mod html;
 mod index;
 mod ocr;
 mod parse;

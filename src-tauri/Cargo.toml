@@ -35,6 +35,9 @@ blake3 = "1"
 walkdir = "2"
 anyhow = "1"
 dirs = "6"
+scraper = "0.27"
+# Must track the version scraper itself uses, or the node types differ.
+ego-tree = "0.11"
 
 [dev-dependencies]
 tempfile = "3"
