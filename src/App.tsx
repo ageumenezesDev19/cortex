@@ -41,10 +41,16 @@ const DEBOUNCE_MS = 120
 
 type Panel = "none" | "topics" | "tree"
 
-/** What the note panel is showing, and whether a search sent us there. */
+/**
+ * What the note panel is showing, and who opened it. A note reached through a
+ * result belongs to that search and leaves with it; one opened from the tree is
+ * your own doing and stays put.
+ */
+type Source = "search" | "tree"
+
 type Open =
-  | { kind: "note"; path: string; anchorStart: number | null }
-  | { kind: "image"; hit: Hit }
+  | { kind: "note"; path: string; anchorStart: number | null; from: Source }
+  | { kind: "image"; hit: Hit; from: Source }
   | null
 
 type Ask =
@@ -165,10 +171,28 @@ export default function App() {
   const openHit = useCallback((hit: Hit) => {
     setOpen(
       hit.kind === "image"
-        ? { kind: "image", hit }
-        : { kind: "note", path: hit.path, anchorStart: hit.startOffset },
+        ? { kind: "image", hit, from: "search" }
+        : { kind: "note", path: hit.path, anchorStart: hit.startOffset, from: "search" },
     )
   }, [])
+
+  /**
+   * Emptying the field returns the app to what it is when it opens: one search,
+   * centred, nothing behind it. The amber frame leaves with it — amber means
+   * "the search found this", so it must not outlive the search.
+   */
+  const changeQuery = useCallback((value: string) => {
+    setQuery(value)
+    if (value.trim().length > 0) return
+    setOpen((current) => (current?.from === "tree" ? current : null))
+  }, [])
+
+  /** Dropping the chip with nothing typed leaves the same nothing behind. */
+  const clearTopic = useCallback(() => {
+    setTopic(null)
+    if (query.trim().length > 0) return
+    setOpen((current) => (current?.from === "tree" ? current : null))
+  }, [query])
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
@@ -182,12 +206,12 @@ export default function App() {
       if (hits[selected]) openHit(hits[selected])
     } else if (event.key === "Backspace" && query.length === 0 && topic) {
       event.preventDefault()
-      setTopic(null)
+      clearTopic()
     } else if (event.key === "Escape") {
       event.preventDefault()
       if (open) setOpen(null)
-      else if (query.length > 0) setQuery("")
-      else setTopic(null)
+      else if (query.length > 0) changeQuery("")
+      else clearTopic()
     }
   }
 
@@ -225,7 +249,7 @@ export default function App() {
         tree={tree}
         activePath={openPath}
         onClose={() => setPanel("none")}
-        onOpenNote={(path) => setOpen({ kind: "note", path, anchorStart: null })}
+        onOpenNote={(path) => setOpen({ kind: "note", path, anchorStart: null, from: "tree" })}
         onCreateNote={(folder) => setAsk({ kind: "new-note", folder })}
         onCreateFolder={(parent) => setAsk({ kind: "new-folder", parent })}
         onRename={(entry) => setAsk({ kind: "rename", entry })}
@@ -243,11 +267,11 @@ export default function App() {
         >
           <SearchField
             value={query}
-            onChange={setQuery}
+            onChange={changeQuery}
             onKeyDown={onKeyDown}
             compact={browsing || open !== null}
             topic={topic}
-            onClearTopic={() => setTopic(null)}
+            onClearTopic={clearTopic}
           />
           {!browsing && !open && <EmptyState vault={vault} dropping={dropping} />}
         </motion.div>
@@ -335,14 +359,14 @@ export default function App() {
           const action =
             ask?.kind === "new-note"
               ? createNote(ask.folder, value).then((path) => {
-                  setOpen({ kind: "note", path, anchorStart: null })
+                  setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
                 })
               : ask?.kind === "new-folder"
                 ? createFolder(ask.parent, value).then(() => {})
                 : ask?.kind === "rename"
                   ? renameEntry(ask.entry.path, value).then((path) => {
                       if (openPath === ask.entry.path) {
-                        setOpen({ kind: "note", path, anchorStart: null })
+                        setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
                       }
                     })
                   : Promise.resolve()
