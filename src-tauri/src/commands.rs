@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -134,13 +135,76 @@ pub fn list_tree(state: State<AppState>) -> Result<Vec<vault::TreeEntry>, String
 }
 
 /// Returns the path of the new note so the caller can open it straight away.
+/// The note is filed on the way in: writing the file and joining its topics is
+/// one call, so the tree and the topic manifests never disagree in between.
 #[tauri::command]
 pub fn create_note(
     state: State<AppState>,
     folder: String,
     title: String,
+    topics: Option<Vec<String>>,
 ) -> Result<String, String> {
-    files::create_note(&state.root, &folder, &title).map_err(|e| e.to_string())
+    let path = files::create_note(&state.root, &folder, &title).map_err(|e| e.to_string())?;
+
+    for slug in topics.unwrap_or_default() {
+        topics::add_member(&state.root, &slug, &path).map_err(|e| e.to_string())?;
+    }
+    Ok(path)
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Placement {
+    pub folder: Option<String>,
+    pub topics: Vec<String>,
+}
+
+/// Where a note by this name probably belongs, decided by what the vault already
+/// contains: the title goes through the normal search, and the folders and
+/// topics of the notes that come back are counted.
+///
+/// No model and no network — the index already knows the answer, and a wrong
+/// guess costs one click to change.
+#[tauri::command]
+pub fn suggest_placement(state: State<AppState>, title: String) -> Result<Placement, String> {
+    if title.trim().is_empty() {
+        return Ok(Placement::default());
+    }
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let groups = search::run(&conn, &title, None, 12).map_err(|e| e.to_string())?;
+    if groups.is_empty() {
+        return Ok(Placement::default());
+    }
+
+    let mut folders: HashMap<String, usize> = HashMap::new();
+    for group in &groups {
+        *folders.entry(group.folder.clone()).or_default() += 1;
+    }
+
+    let paths: Vec<String> = groups.iter().map(|group| group.path.clone()).collect();
+    let placeholders = vec!["?"; paths.len()].join(", ");
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT topic_slug, COUNT(*) FROM topic_members
+             WHERE target_path IN ({placeholders})
+             GROUP BY topic_slug ORDER BY COUNT(*) DESC LIMIT 3"
+        ))
+        .map_err(|e| e.to_string())?;
+
+    let topics: Vec<String> = statement
+        .query_map(rusqlite::params_from_iter(paths), |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|slug| slug.ok())
+        .collect();
+
+    Ok(Placement {
+        // An empty string is the vault root, which is a real answer, not a miss.
+        folder: folders
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(folder, _)| folder),
+        topics,
+    })
 }
 
 #[tauri::command]

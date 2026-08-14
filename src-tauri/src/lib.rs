@@ -38,6 +38,7 @@ pub fn run() {
             commands::import_images,
             commands::list_tree,
             commands::create_note,
+            commands::suggest_placement,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

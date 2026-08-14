@@ -1,9 +1,11 @@
 import { listen } from "@tauri-apps/api/event"
+import { FilePlus, FolderPlus } from "lucide-react"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ConfirmDialog } from "./components/confirm-dialog"
+import { CreateDialog } from "./components/create-dialog"
 import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
 import { PromptDialog } from "./components/prompt-dialog"
@@ -54,7 +56,6 @@ type Open =
   | null
 
 type Ask =
-  | { kind: "new-note"; folder: string }
   | { kind: "new-folder"; parent: string }
   | { kind: "rename"; entry: TreeEntry }
   | null
@@ -78,6 +79,7 @@ export default function App() {
   const [panel, setPanel] = useState<Panel>("none")
   const [ask, setAsk] = useState<Ask>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
+  const [creating, setCreating] = useState<string | null>(null)
 
   const reduceMotion = useReducedMotion()
   const results = useRef<HTMLDivElement>(null)
@@ -202,7 +204,7 @@ export default function App() {
    */
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || ask || confirm) return
+      if (event.key !== "Escape" || ask || confirm || creating !== null) return
       const active = document.activeElement as HTMLElement | null
 
       if (active?.closest("[data-note-surface]")) {
@@ -226,7 +228,17 @@ export default function App() {
 
     window.addEventListener("keydown", onEscape)
     return () => window.removeEventListener("keydown", onEscape)
-  }, [ask, confirm, open, query, topic, panel, changeQuery, clearTopic])
+  }, [ask, confirm, creating, open, query, topic, panel, changeQuery, clearTopic])
+
+  useEffect(() => {
+    const onNew = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key !== "n") return
+      event.preventDefault()
+      setCreating("")
+    }
+    window.addEventListener("keydown", onNew)
+    return () => window.removeEventListener("keydown", onNew)
+  }, [])
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
@@ -258,6 +270,8 @@ export default function App() {
       <Rail
         panel={panel}
         onTogglePanel={(next) => setPanel((current) => (current === next ? "none" : next))}
+        onNewNote={() => setCreating("")}
+        onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
       />
 
       <TopicsPanel
@@ -280,7 +294,7 @@ export default function App() {
         activePath={openPath}
         onClose={() => setPanel("none")}
         onOpenNote={(path) => setOpen({ kind: "note", path, anchorStart: null, from: "tree" })}
-        onCreateNote={(folder) => setAsk({ kind: "new-note", folder })}
+        onCreateNote={(folder) => setCreating(folder)}
         onCreateFolder={(parent) => setAsk({ kind: "new-folder", parent })}
         onRename={(entry) => setAsk({ kind: "rename", entry })}
         onDelete={(entry) => setConfirm({ kind: "entry", entry })}
@@ -304,7 +318,14 @@ export default function App() {
             topic={topic}
             onClearTopic={clearTopic}
           />
-          {!browsing && !open && <EmptyState vault={vault} dropping={dropping} />}
+          {!browsing && !open && (
+            <EmptyState
+              vault={vault}
+              dropping={dropping}
+              onNewNote={() => setCreating("")}
+              onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
+            />
+          )}
         </motion.div>
 
         {(browsing || open) && (
@@ -388,19 +409,15 @@ export default function App() {
         onCancel={() => setAsk(null)}
         onConfirm={(value) => {
           const action =
-            ask?.kind === "new-note"
-              ? createNote(ask.folder, value).then((path) => {
-                  setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
-                })
-              : ask?.kind === "new-folder"
-                ? createFolder(ask.parent, value).then(() => {})
-                : ask?.kind === "rename"
-                  ? renameEntry(ask.entry.path, value).then((path) => {
-                      if (openPath === ask.entry.path) {
-                        setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
-                      }
-                    })
-                  : Promise.resolve()
+            ask?.kind === "new-folder"
+              ? createFolder(ask.parent, value).then(() => {})
+              : ask?.kind === "rename"
+                ? renameEntry(ask.entry.path, value).then((path) => {
+                    if (openPath === ask.entry.path) {
+                      setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
+                    }
+                  })
+                : Promise.resolve()
 
           action
             .then(() => {
@@ -409,6 +426,24 @@ export default function App() {
             })
             .catch(() => {})
           setAsk(null)
+        }}
+      />
+
+      <CreateDialog
+        open={creating !== null}
+        tree={tree}
+        topics={topics}
+        startingFolder={creating ?? ""}
+        onCancel={() => setCreating(null)}
+        onCreate={(title, folder, chosen) => {
+          createNote(folder, title, chosen)
+            .then((path) => {
+              setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
+              refreshTree()
+              refreshTopics()
+            })
+            .catch(() => {})
+          setCreating(null)
         }}
       />
 
@@ -445,7 +480,6 @@ export default function App() {
 }
 
 function promptTitle(ask: Ask) {
-  if (ask?.kind === "new-note") return ask.folder ? `Nova nota em ${ask.folder}` : "Nova nota"
   if (ask?.kind === "new-folder") return ask.parent ? `Nova pasta em ${ask.parent}` : "Nova pasta"
   if (ask?.kind === "rename") return `Renomear ${ask.entry.name}`
   return ""
@@ -479,8 +513,19 @@ function confirmLabel(confirm: Confirm) {
   return "Apagar"
 }
 
-/** A vault with nothing in it should say what to do, not shrug. */
-function EmptyState({ vault, dropping }: { vault: VaultStatus | null; dropping: boolean }) {
+/** A vault with nothing in it should say what to do, not shrug — and the way to
+ *  start writing belongs here, not inside a panel you have to know about. */
+function EmptyState({
+  vault,
+  dropping,
+  onNewNote,
+  onNewFolder,
+}: {
+  vault: VaultStatus | null
+  dropping: boolean
+  onNewNote: () => void
+  onNewFolder: () => void
+}) {
   const empty = (vault?.notes ?? 0) === 0 && (vault?.images ?? 0) === 0
 
   return (
@@ -492,10 +537,30 @@ function EmptyState({ vault, dropping }: { vault: VaultStatus | null; dropping: 
     >
       <p className="text-sm text-muted-foreground">
         {empty
-          ? "Crie a primeira nota pelo ícone de pastas, ou arraste um print para esta janela."
+          ? "Vault vazio. Comece uma nota, ou arraste um print para esta janela."
           : "Digite para buscar. Prints entram arrastando ou com Cmd+V dentro de uma nota."}
       </p>
-      {vault && <p className="mt-2 font-mono text-xs text-muted-foreground">{vault.root}</p>}
+
+      <div className="mt-4 flex justify-center gap-2">
+        <button
+          type="button"
+          onClick={onNewNote}
+          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-90"
+        >
+          <FilePlus className="size-4" aria-hidden />
+          Nova nota
+        </button>
+        <button
+          type="button"
+          onClick={onNewFolder}
+          className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <FolderPlus className="size-4" aria-hidden />
+          Nova pasta
+        </button>
+      </div>
+
+      {vault && <p className="mt-4 font-mono text-xs text-muted-foreground">{vault.root}</p>}
     </div>
   )
 }

@@ -89,8 +89,17 @@ export const importImages = (paths: string[]) => invoke<number>("import_images",
 
 export const listTree = () => invoke<TreeEntry[]>("list_tree")
 
-export const createNote = (folder: string, title: string) =>
-  invoke<string>("create_note", { folder, title })
+/** Where a note by this name probably belongs, judged by what the vault has. */
+export type Placement = {
+  folder: string | null
+  topics: string[]
+}
+
+export const suggestPlacement = (title: string) =>
+  invoke<Placement>("suggest_placement", { title })
+
+export const createNote = (folder: string, title: string, topics: string[] = []) =>
+  invoke<string>("create_note", { folder, title, topics })
 
 export const writeNote = (path: string, source: string) =>
   invoke<void>("write_note", { path, source })

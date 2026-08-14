@@ -128,6 +128,17 @@ pub fn sync_to_db(conn: &mut Connection, topics: &[Topic]) -> Result<()> {
 
 pub use crate::vault::slugify;
 
+/// Files a path under a topic. Reads the manifest fresh every time, so adding a
+/// member can never be the thing that drops the others.
+pub fn add_member(root: &Path, slug: &str, path: &str) -> Result<()> {
+    let mut topic = load(root, slug)?;
+    if topic.members.iter().any(|member| member == path) {
+        return Ok(());
+    }
+    topic.members.push(path.to_string());
+    save(root, &topic)
+}
+
 /// Keeps topic membership honest when a note is renamed or deleted. A manifest
 /// pointing at a path that no longer exists rots in silence, which is the worst
 /// kind of bug — the topic simply gets quieter over time.
@@ -221,5 +232,22 @@ mod tests {
 
         let topic = load(dir.path(), "react").unwrap();
         assert_eq!(topic.members, ["react/hooks.md"]);
+    }
+
+    #[test]
+    fn adding_a_member_keeps_the_ones_already_there() {
+        let dir = vault_with_topic(&["react/hooks.md"]);
+        add_member(dir.path(), "react", "react/estado.md").unwrap();
+
+        let topic = load(dir.path(), "react").unwrap();
+        assert_eq!(topic.members, ["react/hooks.md", "react/estado.md"]);
+    }
+
+    #[test]
+    fn adding_the_same_member_twice_does_not_duplicate_it() {
+        let dir = vault_with_topic(&["react/hooks.md"]);
+        add_member(dir.path(), "react", "react/hooks.md").unwrap();
+
+        assert_eq!(load(dir.path(), "react").unwrap().members, ["react/hooks.md"]);
     }
 }
