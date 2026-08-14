@@ -73,6 +73,17 @@
   :focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
+
+  /*
+   * Except on text fields, which light their own border instead. A field sits
+   * inside a rounded container, so the ring landed as a square inside a curve —
+   * two focus indicators, and the ugly one on top.
+   */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    @apply ring-0 ring-offset-0;
+  }
 }
 
 @layer components {
