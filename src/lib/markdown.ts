@@ -37,7 +37,7 @@ export const serialize = (doc: ProseNode): string => serializer.serialize(doc)
  */
 export type RoundTrip =
   | { survives: true }
-  /** `line` is 1-based, counted in the file as written. */
+  /** `line` is 1-based, counted in the file as written; 0 when it cannot be found. */
   | { survives: false; line: number; text: string }
 
 export function roundTripReport(source: string): RoundTrip {
@@ -53,13 +53,22 @@ export function roundTripReport(source: string): RoundTrip {
   const at = before.findIndex((line, index) => line !== after[index])
   if (at === -1 && before.length === after.length) return { survives: true }
 
-  // The comparison runs on the normalised text, so the line number is reported
-  // against the file the person will actually look at.
   const culprit = before[at] ?? before[before.length - 1] ?? ""
-  const original = source.split("\n")
-  const line = original.findIndex((raw) => raw.trim() === culprit.trim())
+  return { survives: false, line: lineOf(source, culprit), text: culprit.trim() }
+}
 
-  return { survives: false, line: (line === -1 ? at : line) + 1, text: culprit.trim() }
+/**
+ * Where a normalised line came from, in the file as written. Soft wraps are
+ * joined before comparing, so the culprit is usually several source lines glued
+ * together — the first of them is the one to point at. Returns 0 when nothing
+ * matches, and the warning then talks about the note instead of inventing a
+ * number, which is what it used to do.
+ */
+function lineOf(source: string, culprit: string): number {
+  const head = culprit.trim().slice(0, 40)
+  if (!head) return 0
+  const at = source.split("\n").findIndex((line) => line.trim().startsWith(head))
+  return at + 1
 }
 
 export const survivesRoundTrip = (source: string) => roundTripReport(source).survives
@@ -70,8 +79,8 @@ export const survivesRoundTrip = (source: string) => roundTripReport(source).sur
  * not re-wrap — without this every hand-wrapped note would be called lossy and
  * pushed into raw mode.
  *
- * Loss still shows: anything the schema drops comes back with escapes (a table's
- * pipes become `\|`), which no amount of joining hides.
+ * Loss still shows: a table comes back as a paragraph whose pipes are escaped,
+ * and `\|` is the one escape left in place for exactly that reason.
  */
 function normalise(markdown: string) {
   const lines = markdown.split("\n")
@@ -93,14 +102,38 @@ function normalise(markdown: string) {
     const continues =
       !inFence && line !== "" && previous !== undefined && previous !== "" && !isBlockStart(line)
 
+    // Tested against the raw line: unescaping first could turn `\\- texto` into
+    // something that looks like a bullet and open a block that is not there.
+    const clean = inFence ? line : sameMeaning(line)
     if (continues && !isFence(previous)) {
-      out[out.length - 1] = `${previous} ${line.trim()}`
+      out[out.length - 1] = `${previous} ${clean}`
     } else {
-      out.push(line)
+      out.push(clean)
     }
   }
 
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+}
+
+/**
+ * Differences that are spelling, not content. All three showed up as false
+ * alarms over the imported library and locked 183 of 239 notes out of the
+ * editor for nothing.
+ */
+function sameMeaning(line: string) {
+  return (
+    line
+      .trim()
+      // The serializer escapes defensively: `A*2` comes back as `A\*2`, same
+      // text on screen. `\|` is deliberately left escaped — an escaped pipe is
+      // the signature of a table flattened into a paragraph, which is real loss.
+      .replace(/\\([*_`~\[\]()#+\-.!>])/g, "$1")
+      // A rule is a rule, however long it was drawn.
+      .replace(/^([-*_])\1{2,}$/, "---")
+      // `1.` and `2.` in the same place are the same rendered list; markdown-it
+      // renumbers, and Notes wrote every item as `1.`.
+      .replace(/^(\d+)([.)])\s/, "1$2 ")
+  )
 }
 
 const isFence = (line: string) => /^\s*(```|~~~)/.test(line)

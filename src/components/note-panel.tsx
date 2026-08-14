@@ -143,7 +143,8 @@ export function NotePanel({ path, anchorStart, root }: Props) {
         <p className="mb-3 flex shrink-0 items-start gap-2 rounded-md border border-found/40 bg-found/10 px-3 py-2 text-xs text-muted-foreground">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-found" aria-hidden />
           <span>
-            A linha {check.line} usa marcação que o editor de texto não representa
+            {check.line > 0 ? `A linha ${check.line}` : "Um trecho desta nota"} usa marcação que o
+            editor de texto não representa
             {check.text && <> — <code className="font-mono">{truncate(check.text)}</code></>}.{" "}
             {raw
               ? "No markdown ela fica intacta."

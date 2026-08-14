@@ -28,6 +28,7 @@ fn main() {
     println!();
     println!("trazidas   : {}", report.imported);
     println!("puladas    : {}", report.skipped);
+    println!("preservadas: {}", report.kept);
     println!("falharam   : {}", report.failed);
     println!("imagens    : {} marcadas, ainda no Notes", report.attachments);
     println!("levou      : {:.1}s", started.elapsed().as_secs_f64());

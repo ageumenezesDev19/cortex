@@ -113,6 +113,8 @@ export type ImportReport = {
   skipped: number
   failed: number
   attachments: number
+  /** Edited here after being imported, so the re-import left them alone. */
+  kept: number
 }
 
 export type ImportStatus = {

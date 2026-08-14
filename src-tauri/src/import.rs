@@ -11,6 +11,10 @@ use crate::{html, vault};
 pub const IMPORT_DIR: &str = "_importado";
 /// Starts with a dot, so `vault::is_ignored` already keeps it out of the tree.
 const MANIFEST_DIR: &str = ".import";
+/// Bumped whenever the converter changes what it writes. A note imported by an
+/// older version comes again even though Notes never touched it — the first pass
+/// shattered 131 of 232 titles, and nothing else would have brought them back.
+const CONVERTER_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +33,14 @@ pub struct Imported {
     pub modified: String,
     /// Images left in Notes.app; the second pass reads this to know where to go.
     pub attachments: usize,
+    /// Converter that wrote this file. Defaults to 0 so a manifest from before
+    /// this field existed reads as older than anything and comes again.
+    #[serde(default)]
+    pub version: u32,
+    /// blake3 of what the import wrote. If the file on disk no longer matches,
+    /// you edited it by hand, and re-importing must not overwrite your text.
+    #[serde(default)]
+    pub hash: String,
 }
 
 pub type Manifest = HashMap<String, Imported>;
@@ -40,6 +52,8 @@ pub struct Report {
     pub skipped: u32,
     pub failed: u32,
     pub attachments: usize,
+    /// Notes you edited after importing. Left exactly as they are.
+    pub kept: u32,
 }
 
 /// Every note's metadata in one call. Bodies are fetched one at a time — see
@@ -196,16 +210,25 @@ pub fn run(root: &Path, mut progress: impl FnMut(u32, u32, &str)) -> Result<Repo
         progress(index as u32 + 1, total, &note.name);
 
         let path = destination_for(root, note);
-        if manifest
-            .get(&path)
-            .is_some_and(|done| done.id == note.id && done.modified == note.modified)
-        {
+        let done = manifest.get(&path);
+
+        if done.is_some_and(|entry| {
+            entry.id == note.id
+                && entry.modified == note.modified
+                && entry.version == CONVERTER_VERSION
+        }) {
             report.skipped += 1;
+            continue;
+        }
+        // Your text wins over any fix of mine: a file that no longer hashes to
+        // what the import wrote was edited here, and is never overwritten.
+        if done.is_some_and(|entry| edited_by_hand(root, &path, entry)) {
+            report.kept += 1;
             continue;
         }
 
         match import_one(root, note, &path, &body_file) {
-            Ok(attachments) => {
+            Ok((attachments, hash)) => {
                 report.imported += 1;
                 report.attachments += attachments;
                 manifest.insert(
@@ -214,6 +237,8 @@ pub fn run(root: &Path, mut progress: impl FnMut(u32, u32, &str)) -> Result<Repo
                         id: note.id.clone(),
                         modified: note.modified.clone(),
                         attachments,
+                        version: CONVERTER_VERSION,
+                        hash,
                     },
                 );
             }
@@ -226,7 +251,13 @@ pub fn run(root: &Path, mut progress: impl FnMut(u32, u32, &str)) -> Result<Repo
     Ok(report)
 }
 
-fn import_one(root: &Path, note: &NoteRef, path: &str, body_file: &Path) -> Result<usize> {
+/// Returns how many images stayed behind and the hash of what was written.
+fn import_one(
+    root: &Path,
+    note: &NoteRef,
+    path: &str,
+    body_file: &Path,
+) -> Result<(usize, String)> {
     body_of(&note.id, body_file)?;
     let raw = read_without_data_uris(body_file)?;
     let converted = html::to_markdown(&raw);
@@ -234,18 +265,53 @@ fn import_one(root: &Path, note: &NoteRef, path: &str, body_file: &Path) -> Resu
     // The note's name is the heading; Notes keeps it apart from the body, and
     // without it a note whose body is empty would import as an empty file.
     let title = if note.name.is_empty() { "Sem título" } else { &note.name };
-    let source = format!("# {title}\n\n{}", converted.markdown);
+    let source = with_title(title, &converted.markdown);
 
     let absolute = vault::resolve(root, path)?;
     if let Some(parent) = absolute.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(absolute, source)?;
-    Ok(converted.attachments)
+    std::fs::write(absolute, &source)?;
+    Ok((converted.attachments, hash_of(&source)))
 }
 
-/// `_importado/<pasta>/<nota>.md`, slugged the same way the app names everything
-/// else it writes.
+/// The note's name is the title. Notes keeps it apart from the body, so a note
+/// with an empty body would import as an empty file — but the body usually opens
+/// with that same name as an `<h1>`, and prefixing it again wrote the title twice
+/// in 74 of the 232 notes.
+fn with_title(title: &str, markdown: &str) -> String {
+    let body = markdown.trim_start();
+    let already = body
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .strip_prefix("# ")
+        .is_some_and(|heading| vault::slugify(heading) == vault::slugify(title));
+
+    if already {
+        format!("{}\n", body.trim_end())
+    } else {
+        format!("# {title}\n\n{body}")
+    }
+}
+
+fn hash_of(source: &str) -> String {
+    blake3::hash(source.as_bytes()).to_hex().to_string()
+}
+
+/// Whether the file on disk stopped being what the import wrote.
+fn edited_by_hand(root: &Path, path: &str, done: &Imported) -> bool {
+    if done.hash.is_empty() {
+        // Imported before the hash existed: nothing to compare against, and
+        // refusing to re-import on that basis would freeze the whole library.
+        return false;
+    }
+    match vault::resolve(root, path).ok().and_then(|file| std::fs::read_to_string(file).ok()) {
+        Some(current) => hash_of(&current) != done.hash,
+        None => false,
+    }
+}
+
 fn destination_for(root: &Path, note: &NoteRef) -> String {
     let folder = vault::slugify(&note.folder);
     let name = {
@@ -341,7 +407,13 @@ mod tests {
         let mut manifest = Manifest::new();
         manifest.insert(
             path.clone(),
-            Imported { id: same.id.clone(), modified: same.modified.clone(), attachments: 0 },
+            Imported {
+                id: same.id.clone(),
+                modified: same.modified.clone(),
+                attachments: 0,
+                version: CONVERTER_VERSION,
+                hash: String::new(),
+            },
         );
         write_manifest(dir.path(), &manifest).unwrap();
 
@@ -369,12 +441,71 @@ mod tests {
     }
 
     #[test]
+    fn a_body_that_already_opens_with_the_title_does_not_get_it_twice() {
+        let body = "# Carta 1:\n\ntexto\n";
+        assert_eq!(with_title("Carta 1:", body), body);
+    }
+
+    #[test]
+    fn a_body_with_no_title_gets_the_note_name() {
+        assert_eq!(with_title("Hooks", "texto\n"), "# Hooks\n\ntexto\n");
+    }
+
+    /// Accent, case and punctuation differ between the name and the body's own
+    /// heading more often than not; the slug is what decides they are the same.
+    #[test]
+    fn the_titles_are_compared_by_slug_not_by_bytes() {
+        assert_eq!(with_title("Especificidade", "# especificidade:\n\nx\n"), "# especificidade:\n\nx\n");
+    }
+
+    #[test]
+    fn a_note_you_edited_after_importing_is_left_alone() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("_importado")).unwrap();
+        let path = "_importado/nota.md";
+        std::fs::write(dir.path().join(path), "# Nota\n\nseu texto\n").unwrap();
+
+        let untouched = Imported {
+            id: "p1".into(),
+            modified: "hoje".into(),
+            attachments: 0,
+            version: 1,
+            hash: hash_of("# Nota\n\nseu texto\n"),
+        };
+        assert!(!edited_by_hand(dir.path(), path, &untouched));
+
+        let stale = Imported { hash: hash_of("outra coisa"), ..untouched };
+        assert!(edited_by_hand(dir.path(), path, &stale));
+    }
+
+    /// The first import ran before the hash existed. Those entries have to be
+    /// re-importable, or the whole library would be frozen as it came out wrong.
+    #[test]
+    fn an_entry_from_before_the_hash_is_not_treated_as_edited() {
+        let dir = TempDir::new().unwrap();
+        let old = Imported {
+            id: "p1".into(),
+            modified: "hoje".into(),
+            attachments: 0,
+            version: 1,
+            hash: String::new(),
+        };
+        assert!(!edited_by_hand(dir.path(), "_importado/nota.md", &old));
+    }
+
+    #[test]
     fn the_manifest_survives_a_round_trip() {
         let dir = TempDir::new().unwrap();
         let mut manifest = Manifest::new();
         manifest.insert(
             "_importado/react/hooks.md".into(),
-            Imported { id: "p1".into(), modified: "hoje".into(), attachments: 3 },
+            Imported {
+                id: "p1".into(),
+                modified: "hoje".into(),
+                attachments: 3,
+                version: CONVERTER_VERSION,
+                hash: "abc".into(),
+            },
         );
         write_manifest(dir.path(), &manifest).unwrap();
 

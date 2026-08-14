@@ -162,6 +162,7 @@ function Done({ status, onClose }: { status: ImportStatus | null; onClose: () =>
 
       <ul className="mt-3 space-y-1 font-mono text-xs text-muted-foreground">
         {(report?.skipped ?? 0) > 0 && <li>{report?.skipped} já estavam aqui, puladas</li>}
+        {(report?.kept ?? 0) > 0 && <li>{report?.kept} você editou aqui, preservadas</li>}
         {(report?.attachments ?? 0) > 0 && (
           <li>{report?.attachments} imagens marcadas, ainda no Notes</li>
         )}

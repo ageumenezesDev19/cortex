@@ -35,6 +35,9 @@ struct Out {
     /// Nesting depth of `ul`/`ol`, so indentation follows the source.
     depth: usize,
     ordered: Vec<bool>,
+    /// Level of the heading the current line belongs to, so the next heading
+    /// knows whether it continues this one. Cleared whenever a line closes.
+    heading_open: Option<usize>,
     attachments: usize,
 }
 
@@ -44,8 +47,15 @@ impl Out {
     }
 
     fn flush(&mut self) {
-        let line = self.line.trim_end().to_string();
+        let mut line = self.line.trim_end().to_string();
+        // Notes indents a paragraph with a literal tab. At the root, markdown
+        // reads an indented line as a code block, and the paragraph came back
+        // fenced. Inside a list the indentation is ours and means nesting.
+        if self.depth == 0 {
+            line = line.trim_start().to_string();
+        }
         self.line.clear();
+        self.heading_open = None;
         self.lines.push(line);
     }
 
@@ -72,17 +82,27 @@ fn walk(node: NodeRef<'_, Node>, out: &mut Out) {
                     out.break_line();
                 }
                 name @ ("h1" | "h2" | "h3" | "h4" | "h5" | "h6") => {
-                    out.break_line();
                     let level = name[1..].parse::<usize>().unwrap_or(1);
 
                     // Rendered apart because a <br> inside the heading flushes
                     // the shared buffer, and Notes opens most notes with an
                     // empty <h1><br></h1> that would leave a lone `#` behind.
                     let text = nested(children(), out);
-                    if !text.is_empty() {
-                        out.push(&format!("{} {text}", "#".repeat(level)));
+                    if text.trim().is_empty() {
+                        // Nothing to title.
+                    } else if out.heading_open == Some(level) {
+                        // Notes splits one title across neighbouring headings —
+                        // `Carta 1:` arrives as three <h1> in a row. The spacing
+                        // lives in the fragments, so they are appended as they came.
+                        out.push(&text);
+                    } else {
                         out.break_line();
+                        out.push(&format!("{} {}", "#".repeat(level), text.trim_start()));
+                        out.heading_open = Some(level);
                     }
+                    // The line stays open: whoever closes it — the enclosing
+                    // <div>, a <br>, the end of the body — is the same thing that
+                    // separates the title from what comes after.
                 }
                 "ul" | "ol" => {
                     out.break_line();
@@ -143,14 +163,18 @@ fn walk(node: NodeRef<'_, Node>, out: &mut Out) {
 
 /// Renders children into their own buffer and returns them as one line, keeping
 /// the attachment tally with the caller.
+///
+/// The ends are left alone: a title arriving in pieces carries its spacing in
+/// them — `<h1>Carta </h1><h1>1</h1>` is `Carta 1`, not `Carta1`.
 fn nested<'a>(children: impl Iterator<Item = NodeRef<'a, Node>>, out: &mut Out) -> String {
     let mut inner = Out::default();
     for child in children {
         walk(child, &mut inner);
     }
-    inner.flush();
     out.attachments += inner.attachments;
-    inner.lines.join(" ").trim().to_string()
+    // Deliberately not flushed: `flush` trims, and the ends are the spacing.
+    inner.lines.push(inner.line.clone());
+    inner.lines.join(" ")
 }
 
 /// Applies an inline mark around whatever the children produced.
@@ -162,9 +186,17 @@ fn nested<'a>(children: impl Iterator<Item = NodeRef<'a, Node>>, out: &mut Out) 
 fn wrap(node: NodeRef<'_, Node>, out: &mut Out, fence: &str) {
     let start = out.line.len();
     let flushed_before = out.lines.len();
+    let heading_before = out.heading_open;
 
     for child in node.children() {
         walk(child, out);
+    }
+
+    // Notes wraps whole titles in <b> and <u>. The fence would land before the
+    // `#` and the line would stop being a title — and a title is already
+    // emphatic, so the mark is dropped rather than moved inside.
+    if heading_before.is_some() || out.heading_open.is_some() {
+        return;
     }
 
     let spanned = out.lines.len() > flushed_before;
@@ -267,25 +299,66 @@ fn escape(text: &str) -> String {
     text.replace('\u{a0}', " ")
 }
 
-/// Notes emits a blank `<div>` between every line; three or more blank lines in
-/// a row say nothing that one blank line does not.
+/// Notes emits a blank `<div>` between every line, and no blank line at all
+/// between blocks. Both are fixed here: runs of blank lines collapse to one, and
+/// a block that touches the paragraph above it gets the blank line markdown
+/// requires — without it the editor rewrote the note just to add one, and the
+/// round-trip guard read that rewrite as loss and refused to open the note.
 fn tidy(markdown: &str) -> String {
-    let mut out = String::new();
+    let mut out: Vec<String> = Vec::new();
     let mut blanks = 0;
 
-    for line in markdown.lines() {
+    for raw in markdown.lines() {
+        let line = raw.trim_end();
         if line.trim().is_empty() {
             blanks += 1;
-            if blanks > 1 {
-                continue;
+            if blanks == 1 {
+                out.push(String::new());
             }
-        } else {
-            blanks = 0;
+            continue;
         }
-        out.push_str(line.trim_end());
-        out.push('\n');
+        blanks = 0;
+
+        if out.last().is_some_and(|previous| needs_blank(previous, line)) {
+            out.push(String::new());
+        }
+        out.push(line.to_string());
     }
-    format!("{}\n", out.trim())
+    format!("{}\n", out.join("\n").trim())
+}
+
+#[derive(PartialEq)]
+enum Block {
+    Plain,
+    Heading,
+    Quote,
+    List,
+    Table,
+}
+
+fn block_of(line: &str) -> Block {
+    let text = line.trim_start();
+    if text.starts_with('|') {
+        Block::Table
+    } else if text.starts_with("> ") {
+        Block::Quote
+    } else if text.trim_start_matches('#').starts_with(' ') && text.starts_with('#') {
+        Block::Heading
+    } else if text.starts_with("- ") || text.starts_with("1. ") {
+        Block::List
+    } else {
+        Block::Plain
+    }
+}
+
+/// Only a paragraph, a list and a table continue on the next line. Everything
+/// else starts a block, and a block needs air above it.
+fn needs_blank(previous: &str, line: &str) -> bool {
+    if previous.trim().is_empty() {
+        return false;
+    }
+    let (above, here) = (block_of(previous), block_of(line));
+    above != here || matches!(above, Block::Heading | Block::Quote)
 }
 
 #[cfg(test)]
@@ -308,13 +381,48 @@ mod tests {
 
     #[test]
     fn headings_carry_their_level() {
-        assert_eq!(md("<div><h1>Título</h1></div><div>corpo</div>"), "# Título\ncorpo\n");
+        assert_eq!(md("<div><h1>Título</h1></div><div>corpo</div>"), "# Título\n\ncorpo\n");
         assert_eq!(md("<h2>Sub</h2>"), "## Sub\n");
     }
 
     #[test]
     fn the_empty_heading_notes_opens_with_is_dropped() {
         assert_eq!(md("<div><h1><br></h1></div><div>corpo</div>"), "corpo\n");
+    }
+
+    #[test]
+    fn a_title_split_across_neighbouring_headings_stays_one_title() {
+        assert_eq!(md("<div><h1>Carta </h1><h1>1</h1><h1>:</h1></div>"), "# Carta 1:\n");
+        assert_eq!(md("<div><h1>Aula</h1><h1>s</h1><h1>:</h1><h1><br></h1></div>"), "# Aulas:\n");
+    }
+
+    /// Notes wraps whole titles in <b> and <u>; the fence landed before the `#`.
+    #[test]
+    fn a_title_wrapped_in_bold_is_still_a_title() {
+        assert_eq!(
+            md("<div><b><h1>Deploy do </h1></b><b><u><h1>02-api</h1></u></b><h1>:</h1></div>"),
+            "# Deploy do 02-api:\n"
+        );
+    }
+
+    /// Notes indents with a literal tab, and markdown read the line as code.
+    #[test]
+    fn a_tab_indented_line_does_not_become_a_code_block() {
+        assert_eq!(md("<div>\tSal. 37:29 - texto<br></div>"), "Sal. 37:29 - texto\n");
+    }
+
+    #[test]
+    fn indentation_inside_a_list_is_kept() {
+        assert_eq!(md("<ul><li>um<ul><li>dentro</li></ul></li></ul>"), "- um\n  - dentro\n");
+    }
+
+    #[test]
+    fn a_block_glued_to_the_paragraph_above_gets_its_blank_line() {
+        assert_eq!(
+            md("<div>texto</div><div><img src=\"\"></div>"),
+            "texto\n\n> \u{27e8}imagem 1 \u{2014} ainda no Notes.app\u{27e9}\n"
+        );
+        assert_eq!(md("<div>texto</div><ul><li>um</li></ul>"), "texto\n\n- um\n");
     }
 
     #[test]
