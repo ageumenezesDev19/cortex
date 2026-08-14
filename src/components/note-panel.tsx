@@ -2,7 +2,7 @@ import { Code2, TriangleAlert, Type } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { getNote, pasteImage, writeNote, type NoteContent } from "../lib/api"
-import { headingIndexAt, survivesRoundTrip } from "../lib/markdown"
+import { headingIndexAt, roundTripReport, type RoundTrip } from "../lib/markdown"
 import { RichEditor } from "./rich-editor"
 
 /** Long enough not to write on every keystroke, short enough to forget about. */
@@ -19,7 +19,7 @@ export function NotePanel({ path, anchorStart, root }: Props) {
   const [note, setNote] = useState<NoteContent | null>(null)
   const [draft, setDraft] = useState("")
   const [raw, setRaw] = useState(false)
-  const [lossy, setLossy] = useState(false)
+  const [check, setCheck] = useState<RoundTrip>({ survives: true })
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
 
@@ -34,12 +34,14 @@ export function NotePanel({ path, anchorStart, root }: Props) {
     getNote(path)
       .then((content) => {
         if (!active) return
-        // A note the round trip would damage never enters the rich editor.
-        const survives = survivesRoundTrip(content.source)
+        // The rich editor rewrites the whole file on save, so a note it cannot
+        // represent opens in markdown — but only opens there. Switching back is
+        // yours to decide, with the cost stated.
+        const report = roundTripReport(content.source)
         setNote(content)
         setDraft(content.source)
-        setLossy(!survives)
-        setRaw(!survives)
+        setCheck(report)
+        setRaw(!report.survives)
         setDirty(false)
         setError(null)
       })
@@ -68,7 +70,7 @@ export function NotePanel({ path, anchorStart, root }: Props) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return
-      if (event.key === "e" && !lossy) {
+      if (event.key === "e") {
         event.preventDefault()
         setRaw((value) => !value)
       } else if (event.key === "s") {
@@ -78,7 +80,7 @@ export function NotePanel({ path, anchorStart, root }: Props) {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [save, lossy])
+  }, [save])
 
   const change = useCallback((markdown: string) => {
     setDraft(markdown)
@@ -125,26 +127,27 @@ export function NotePanel({ path, anchorStart, root }: Props) {
           {dirty ? "salvando…" : "salvo"}
         </span>
 
-        {!lossy && (
-          <button
-            type="button"
-            onClick={() => setRaw((value) => !value)}
-            title={raw ? "Texto (Cmd+E)" : "Markdown (Cmd+E)"}
-            aria-label={raw ? "Ver como texto" : "Ver o markdown"}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            {raw ? <Type className="size-3.5" aria-hidden /> : <Code2 className="size-3.5" aria-hidden />}
-            {raw ? "texto" : "markdown"}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setRaw((value) => !value)}
+          title={raw ? "Texto (Cmd+E)" : "Markdown (Cmd+E)"}
+          aria-label={raw ? "Ver como texto" : "Ver o markdown"}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {raw ? <Type className="size-3.5" aria-hidden /> : <Code2 className="size-3.5" aria-hidden />}
+          {raw ? "texto" : "markdown"}
+        </button>
       </header>
 
-      {lossy && (
+      {!check.survives && (
         <p className="mb-3 flex shrink-0 items-start gap-2 rounded-md border border-found/40 bg-found/10 px-3 py-2 text-xs text-muted-foreground">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-found" aria-hidden />
           <span>
-            Esta nota tem marcação que o editor de texto não sabe reescrever sem estragar — uma
-            tabela, provavelmente. Ela abre no markdown, que preserva tudo.
+            A linha {check.line} usa marcação que o editor de texto não representa
+            {check.text && <> — <code className="font-mono">{truncate(check.text)}</code></>}.{" "}
+            {raw
+              ? "No markdown ela fica intacta."
+              : "Salvar daqui vai reescrevê-la; o markdown preserva."}
           </span>
         </p>
       )}
@@ -162,8 +165,10 @@ export function NotePanel({ path, anchorStart, root }: Props) {
       ) : (
         <div className="min-h-0 flex-1">
           <RichEditor
-            key={path}
-            markdown={note.source}
+            // Remounts on a mode switch so the editor is seeded with what you
+            // just typed in markdown, not with the file as it was opened.
+            key={`${path}:${raw}`}
+            markdown={draft}
             root={root}
             noteFolder={folderOf(note.path)}
             anchorHeading={anchorHeading}
@@ -174,6 +179,11 @@ export function NotePanel({ path, anchorStart, root }: Props) {
       )}
     </div>
   )
+}
+
+/** Enough of the offending line to recognise it, not enough to fill the banner. */
+function truncate(line: string) {
+  return line.length > 60 ? `${line.slice(0, 60)}…` : line
 }
 
 function folderOf(path: string) {

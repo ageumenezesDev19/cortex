@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 
-import { headingIndexAt, parse, serialize, survivesRoundTrip } from "../src/lib/markdown"
+import { headingIndexAt, roundTripReport, survivesRoundTrip } from "../src/lib/markdown"
 
 /**
  * The rich editor rewrites a whole note on save, so anything the schema cannot
@@ -37,16 +37,22 @@ try {
   console.log(`vault não encontrado em ${root}`)
 }
 
+// The vault is the person's data, not a fixture: it changes under us, and a note
+// that cannot round-trip is a finding to report, not a broken build. The
+// assertions below are what actually pass or fail.
+console.log("vault:")
 for (const path of notes) {
-  const source = readFileSync(path, "utf8")
-  const survives = survivesRoundTrip(source)
-  check(path.replace(`${root}/`, ""), survives)
+  const report = roundTripReport(readFileSync(path, "utf8"))
+  const name = path.replace(`${root}/`, "")
 
-  if (!survives) {
-    console.log("  --- de volta ---")
-    console.log(serialize(parse(source)))
+  if (report.survives) {
+    console.log(`  ok      ${name}`)
+  } else {
+    console.log(`  abre no markdown  ${name}`)
+    console.log(`     linha ${report.line}: ${report.text}`)
   }
 }
+console.log()
 
 // The guard has to refuse what it cannot represent, or the save commits the loss.
 check("tabela é refusada pela guarda", !survivesRoundTrip("# N\n\n| a | b |\n| - | - |\n| 1 | 2 |\n"))

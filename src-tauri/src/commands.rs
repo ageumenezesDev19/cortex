@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -112,11 +112,14 @@ pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<Vec<S
         let Some(name) = source.file_name() else {
             continue;
         };
-        let mut destination = target.join(name);
+        // A macOS screenshot arrives as "Screenshot 2026-08-14 at 1.57.12 AM.png",
+        // and a space in a markdown link ends the URL right there.
+        let safe = vault::safe_file_name(&name.to_string_lossy());
+        let mut destination = target.join(&safe);
         let mut attempt = 1;
         while destination.exists() {
-            let stem = source.file_stem().unwrap_or_default().to_string_lossy().to_string();
-            let ext = source.extension().unwrap_or_default().to_string_lossy().to_string();
+            let stem = Path::new(&safe).file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let ext = Path::new(&safe).extension().unwrap_or_default().to_string_lossy().to_string();
             destination = target.join(format!("{stem}-{attempt}.{ext}"));
             attempt += 1;
         }

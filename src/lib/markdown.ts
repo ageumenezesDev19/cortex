@@ -35,13 +35,34 @@ export const serialize = (doc: ProseNode): string => serializer.serialize(doc)
  * So no note enters the rich editor without proving it survives the trip first.
  * Trailing whitespace is not a loss; anything else is.
  */
-export function survivesRoundTrip(source: string): boolean {
+export type RoundTrip =
+  | { survives: true }
+  /** `line` is 1-based, counted in the file as written. */
+  | { survives: false; line: number; text: string }
+
+export function roundTripReport(source: string): RoundTrip {
+  let back: string
   try {
-    return normalise(serialize(parse(source))) === normalise(source)
+    back = serialize(parse(source))
   } catch {
-    return false
+    return { survives: false, line: 1, text: source.split("\n")[0] ?? "" }
   }
+
+  const before = normalise(source).split("\n")
+  const after = normalise(back).split("\n")
+  const at = before.findIndex((line, index) => line !== after[index])
+  if (at === -1 && before.length === after.length) return { survives: true }
+
+  // The comparison runs on the normalised text, so the line number is reported
+  // against the file the person will actually look at.
+  const culprit = before[at] ?? before[before.length - 1] ?? ""
+  const original = source.split("\n")
+  const line = original.findIndex((raw) => raw.trim() === culprit.trim())
+
+  return { survives: false, line: (line === -1 ? at : line) + 1, text: culprit.trim() }
 }
+
+export const survivesRoundTrip = (source: string) => roundTripReport(source).survives
 
 /**
  * Compares meaning, not bytes. A paragraph hand-wrapped at 80 columns and the

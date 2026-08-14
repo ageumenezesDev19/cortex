@@ -107,10 +107,12 @@ pub fn move_into_assets(root: &Path, image: &str, note: &str) -> Result<String> 
         .ok_or_else(|| anyhow!("nota sem pasta"))?
         .join(vault::ASSETS_DIR);
 
-    let name = source
-        .file_name()
-        .ok_or_else(|| anyhow!("imagem sem nome"))?
-        .to_owned();
+    let name = vault::safe_file_name(
+        &source
+            .file_name()
+            .ok_or_else(|| anyhow!("imagem sem nome"))?
+            .to_string_lossy(),
+    );
     let destination = assets.join(&name);
 
     if destination == source {
@@ -150,6 +152,7 @@ pub fn paste_image(root: &Path, note_path: &str, bytes: &[u8], extension: &str) 
         .unwrap_or(0);
 
     let name = format!("print-{stamp}.{extension}");
+    debug_assert_eq!(name, vault::safe_file_name(&name), "nome gerado precisa ser seguro");
     std::fs::write(assets.join(&name), bytes)?;
     Ok(format!("![]({}/{name})", vault::ASSETS_DIR))
 }
@@ -260,6 +263,27 @@ mod tests {
         assert!(dir.path().join("react/_assets/print.ocr.json").exists());
         assert!(!inbox.join("print.png").exists(), "sobrou no inbox");
         assert!(!inbox.join("print.ocr.json").exists(), "sidecar ficou órfão");
+    }
+
+    /// The failure that started this: a note embedding a name with spaces is
+    /// broken markdown, and the round-trip guard then blames the note.
+    #[test]
+    fn a_screenshot_with_spaces_arrives_next_to_the_note_renamed() {
+        let dir = TempDir::new().unwrap();
+        let inbox = dir.path().join("inbox").join(vault::ASSETS_DIR);
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("Screenshot 2026-08-14 at 1.57.12 AM.png"), b"x").unwrap();
+
+        let note = create_note(dir.path(), "react", "Hooks").unwrap();
+        let moved = move_into_assets(
+            dir.path(),
+            "inbox/_assets/Screenshot 2026-08-14 at 1.57.12 AM.png",
+            &note,
+        )
+        .unwrap();
+
+        assert_eq!(moved, "react/_assets/screenshot-2026-08-14-at-1-57-12-am.png");
+        assert!(!moved.contains(' '), "espaço no caminho quebra o markdown");
     }
 
     #[test]

@@ -132,6 +132,22 @@ fn fold(character: char) -> char {
     }
 }
 
+/// A file name that markdown can point at without ceremony. A space in a link
+/// destination ends the URL there unless the whole thing is wrapped in `<>`, so
+/// `Screenshot 2026-08-14 at 1.57.12 AM.png` silently breaks every note that
+/// embeds it. The extension is left alone; only the name is folded.
+pub fn safe_file_name(name: &str) -> String {
+    let path = Path::new(name);
+    let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    let slug = slugify(&stem);
+    let slug = if slug.is_empty() { "arquivo".to_string() } else { slug };
+
+    match path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
+        Some(extension) => format!("{slug}.{extension}"),
+        None => slug,
+    }
+}
+
 /// A name typed by a person becomes a file name. Separators would silently
 /// create folders, and a leading dot would hide the note from the indexer.
 pub fn safe_name(name: &str) -> Result<String> {
@@ -302,5 +318,16 @@ mod tests {
         assert_eq!(slugify("Programação   Funcional"), "programacao-funcional");
         assert_eq!(slugify("Next.js"), "next-js");
         assert_eq!(slugify("!!! C# !!!"), "c");
+    }
+
+    #[test]
+    fn a_screenshot_name_loses_its_spaces_but_keeps_its_extension() {
+        assert_eq!(
+            safe_file_name("Screenshot 2026-08-14 at 1.57.12 AM.png"),
+            "screenshot-2026-08-14-at-1-57-12-am.png"
+        );
+        assert_eq!(safe_file_name("WhatsApp Image.JPEG"), "whatsapp-image.jpeg");
+        assert_eq!(safe_file_name("ja-seguro.png"), "ja-seguro.png");
+        assert_eq!(safe_file_name("!!!.png"), "arquivo.png");
     }
 }
