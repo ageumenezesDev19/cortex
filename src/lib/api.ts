@@ -243,15 +243,47 @@ export async function uploadImage(file: File, note = ""): Promise<string> {
   return ((await response.json()) as { path: string }).path
 }
 
-/** Where to open the vault from the phone. Desktop only — see `server_address`. */
+/** Where to open the vault from the phone. Desktop only: the phone is looking
+ * at a server, not running one. */
 export type ServerLink = {
   label: string
   url: string
   /** False means plain HTTP: the session cookie crosses that network in clear. */
   secure: boolean
+  /** Whether the switch beside it is on. Off still shows, and says what to turn on. */
+  live: boolean
 }
 
-export const serverAddress = () => invoke<ServerLink[]>("server_address")
+export type TailscaleStatus = {
+  installed: boolean
+  connected: boolean
+  /** What the daemon called its own state, shown as-is when it is not running. */
+  state: string
+  host: string | null
+  serving: boolean
+}
+
+export type ServerState = {
+  settings: { serving: boolean; localNetwork: boolean; tailscale: boolean }
+  port: number
+  tailscale: TailscaleStatus
+  links: ServerLink[]
+}
+
+/** One link in the chain the phone walks, and whether it holds. */
+export type TestStep = {
+  label: string
+  ok: boolean
+  detail: string
+}
+
+export const serverState = () => invoke<ServerState>("server_state")
+
+export const setServer = (serving: boolean, localNetwork: boolean, tailscale: boolean) =>
+  invoke<ServerState>("set_server", { serving, localNetwork, tailscale })
+
+export const testConnection = (local: boolean) =>
+  invoke<TestStep[]>("test_connection", { local })
 
 /**
  * The Notes.app import is desktop only — the library lives on this machine — so

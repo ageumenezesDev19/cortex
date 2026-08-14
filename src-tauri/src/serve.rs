@@ -19,7 +19,8 @@ use include_dir::{include_dir, Dir};
 use serde_json::{json, Value};
 
 use crate::api::{self, AppState};
-use crate::{db, vault};
+use crate::settings::{self, Settings};
+use crate::{db, tailscale, vault};
 
 pub const PORT: u16 = 8787;
 /// Big enough for a photo out of an iPhone, small enough that a mistake cannot
@@ -32,18 +33,6 @@ const TOKEN_DIR: &str = ".server";
 
 static BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
-/// The addresses to open on the phone, kept by the app so the panel can show
-/// them without asking the network twice.
-pub struct Address {
-    pub token: String,
-}
-
-impl Address {
-    pub fn new(token: String) -> Self {
-        Self { token }
-    }
-}
-
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Link {
@@ -51,49 +40,25 @@ pub struct Link {
     pub url: String,
     /// False means plain HTTP, and the panel says so out loud.
     pub secure: bool,
+    /// Whether the switch beside it is on. A link that is off still shows, so
+    /// the panel can explain what to turn on rather than hiding the option.
+    pub live: bool,
 }
 
-/// Where this machine can be reached, best first.
-///
-/// Tailscale gives a real certificate and works from anywhere; the local
-/// address is HTTP, so the session cookie crosses the Wi-Fi in the clear. Fine
-/// at home, not fine on a network you do not own.
-pub fn links(token: &str) -> Vec<Link> {
-    let mut links = Vec::new();
-
-    if let Some(host) = tailscale_host() {
-        links.push(Link {
-            label: "Tailscale".into(),
-            url: format!("https://{host}:8443/?t={token}"),
-            secure: true,
-        });
-    }
-    if let Some(address) = local_address() {
-        links.push(Link {
-            label: "Rede local".into(),
-            url: format!("http://{address}:{PORT}/?t={token}"),
-            secure: false,
-        });
-    }
-    links
-}
-
-fn tailscale_host() -> Option<String> {
-    let output = std::process::Command::new("tailscale")
-        .args(["status", "--json"])
-        .output()
-        .ok()?;
-    let status: Value = serde_json::from_slice(&output.stdout).ok()?;
-    if status.get("BackendState")?.as_str()? != "Running" {
-        return None;
-    }
-    let name = status.get("Self")?.get("DNSName")?.as_str()?;
-    Some(name.trim_end_matches('.').to_string())
+/// Everything the address panel needs in one answer, so the switches show what
+/// is true rather than what the app remembers doing.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerState {
+    pub settings: Settings,
+    pub port: u16,
+    pub tailscale: tailscale::Status,
+    pub links: Vec<Link>,
 }
 
 /// Asking the routing table which address would reach the outside. Nothing is
 /// sent — a UDP socket picks the interface the moment it is connected.
-fn local_address() -> Option<String> {
+pub fn local_address() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     Some(socket.local_addr().ok()?.ip().to_string())
@@ -104,45 +69,184 @@ struct Server {
     token: String,
 }
 
-/// Starts the server and returns the token, so the app can show the address.
-///
-/// The connection is its own on purpose: the same choice the indexer made, so a
-/// search from the phone never waits on the window's lock.
-pub fn spawn(root: PathBuf) -> Result<String> {
-    let token = ensure_token(&root)?;
-    let conn = db::open(&vault::db_path(&root))?;
-    let server = Arc::new(Server {
-        state: AppState { conn: Mutex::new(conn), root },
-        token: token.clone(),
-    });
+/// The server, and the switches that decide how far it reaches.
+pub struct Control {
+    root: PathBuf,
+    pub token: String,
+    /// Dropping the sender is what tells a running listener to wind down.
+    stop: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    settings: Mutex<Settings>,
+}
 
-    let app = Router::new()
+impl Control {
+    pub fn new(root: PathBuf) -> Result<Self> {
+        let token = ensure_token(&root)?;
+        let mut settings = settings::load(&root);
+        // A mapping left over from a previous run — or from before this app knew
+        // how to make one — is real, so the switch starts on rather than lying.
+        if tailscale::status(PORT).serving {
+            settings.tailscale = true;
+        }
+        Ok(Self { root, token, stop: Mutex::new(None), settings: Mutex::new(settings) })
+    }
+
+    pub fn settings(&self) -> Settings {
+        *self.settings.lock().expect("settings")
+    }
+
+    pub fn state(&self) -> ServerState {
+        let settings = self.settings();
+        let status = tailscale::status(PORT);
+        ServerState {
+            links: self.links(&settings, &status),
+            settings,
+            port: PORT,
+            tailscale: status,
+        }
+    }
+
+    /// Where this machine can be reached, best first. Tailscale gives a real
+    /// certificate and works from anywhere; the local address is HTTP, so the
+    /// session cookie crosses the Wi-Fi in the clear — fine at home, not fine on
+    /// a network you do not own.
+    fn links(&self, settings: &Settings, status: &tailscale::Status) -> Vec<Link> {
+        let mut links = Vec::new();
+
+        if let Some(host) = status.host.clone() {
+            links.push(Link {
+                label: "Tailscale".into(),
+                url: format!("https://{host}:{}/?t={}", tailscale::HTTPS_PORT, self.token),
+                secure: true,
+                live: settings.serving && settings.tailscale && status.serving,
+            });
+        }
+        if let Some(address) = local_address() {
+            links.push(Link {
+                label: "Rede local".into(),
+                url: format!("http://{address}:{PORT}/?t={}", self.token),
+                secure: false,
+                live: settings.serving && settings.local_network,
+            });
+        }
+        links
+    }
+
+    /// Puts the switches into effect and writes them down. The listener is torn
+    /// down and rebuilt when the reach changes; the token stays the same, so an
+    /// address already open on the phone keeps working.
+    pub fn apply(&self, wanted: Settings) -> Result<(), String> {
+        let current = self.settings();
+        let running = self.stop.lock().expect("stop").is_some();
+        // Nothing running is also a change: the first call after launch asks for
+        // the settings it already has, and has to start the listener anyway.
+        let reach_changed = current.serving != wanted.serving
+            || current.local_network != wanted.local_network
+            || (wanted.serving && !running);
+
+        if reach_changed {
+            self.shutdown();
+            if wanted.serving {
+                self.listen(wanted.local_network)?;
+            }
+        }
+
+        if wanted.tailscale != current.tailscale || (wanted.tailscale && !tailscale::status(PORT).serving) {
+            if wanted.tailscale {
+                tailscale::start(PORT)?;
+            } else {
+                tailscale::stop()?;
+            }
+        }
+
+        *self.settings.lock().expect("settings") = wanted;
+        settings::save(&self.root, &wanted)
+    }
+
+    /// Called on the way out. A mapping pointing at a port that is no longer
+    /// answering is worse than no mapping at all.
+    pub fn shut_everything_down(&self) {
+        if self.settings().tailscale {
+            let _ = tailscale::stop();
+        }
+        self.shutdown();
+    }
+
+    fn shutdown(&self) {
+        if let Some(stop) = self.stop.lock().expect("stop").take() {
+            let _ = stop.send(true);
+        }
+    }
+
+    /// Binds before spawning, so a port already taken is an error the person
+    /// sees instead of a line in a log nobody reads.
+    ///
+    /// The connection is its own on purpose: the same choice the indexer made,
+    /// so a search from the phone never waits on the window's lock.
+    fn listen(&self, local_network: bool) -> Result<(), String> {
+        let host = if local_network { [0, 0, 0, 0] } else { [127, 0, 0, 1] };
+        let address = SocketAddr::from((host, PORT));
+
+        // The listener the old one just released can take a moment to free up.
+        let socket = bind_retrying(address)?;
+        socket.set_nonblocking(true).map_err(|error| error.to_string())?;
+
+        let conn = db::open(&vault::db_path(&self.root)).map_err(|error| error.to_string())?;
+        let server = Arc::new(Server {
+            state: AppState { conn: Mutex::new(conn), root: self.root.clone() },
+            token: self.token.clone(),
+        });
+
+        let (stop, mut wait) = tokio::sync::watch::channel(false);
+        *self.stop.lock().expect("stop") = Some(stop);
+
+        let app = router(server);
+        tauri::async_runtime::spawn(async move {
+            let Ok(listener) = tokio::net::TcpListener::from_std(socket) else { return };
+            let served = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = wait.changed().await;
+            });
+            if let Err(error) = served.await {
+                eprintln!("[cortex] o servidor parou: {error}");
+            }
+        });
+        Ok(())
+    }
+}
+
+fn bind_retrying(address: SocketAddr) -> Result<std::net::TcpListener, String> {
+    let mut last = String::new();
+    for _ in 0..20 {
+        match std::net::TcpListener::bind(address) {
+            Ok(socket) => return Ok(socket),
+            Err(error) => {
+                last = error.to_string();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+    Err(format!("a porta {} não abriu: {last}", address.port()))
+}
+
+fn router(server: Arc<Server>) -> Router {
+    Router::new()
         .route("/api/{command}", post(call))
         .route("/upload", post(upload))
         // axum defaults to 2 MB, which no photo out of a phone fits in. One byte
         // over the ceiling still reaches the handler, so the person gets the
         // message in the app's own words instead of a dropped connection.
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 1))
+        .route("/health", get(health))
         .route("/asset/{*path}", get(asset))
         .route("/", get(page))
         .route("/{*path}", get(page))
-        .with_state(server);
+        .with_state(server)
+}
 
-    tauri::async_runtime::spawn(async move {
-        let address = SocketAddr::from(([0, 0, 0, 0], PORT));
-        match tokio::net::TcpListener::bind(address).await {
-            Ok(listener) => {
-                if let Err(error) = axum::serve(listener, app).await {
-                    eprintln!("[cortex] o servidor parou: {error}");
-                }
-            }
-            // Losing the server must not take the app down with it: the desktop
-            // works exactly the same without it.
-            Err(error) => eprintln!("[cortex] não consegui abrir a porta {PORT}: {error}"),
-        }
-    });
-
-    Ok(token)
+/// The one route without a session, so the app can test the chain end to end
+/// without putting the token on a command line. What it gives away — that a
+/// Cortex answers here — the TLS handshake gave away already.
+async fn health() -> &'static str {
+    tailscale::HEALTH_BODY
 }
 
 /// The token is written once and reused, so a restart does not invalidate the
@@ -370,7 +474,7 @@ async fn asset(
     };
     match std::fs::read(&file) {
         Ok(bytes) => ([(header::CONTENT_TYPE, mime_of(&file))], bytes).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "não achei").into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "arquivo não encontrado").into_response(),
     }
 }
 

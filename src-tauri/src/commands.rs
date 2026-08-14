@@ -13,6 +13,8 @@ use crate::import;
 use crate::search::Group;
 use crate::topics::Topic;
 use crate::serve;
+use crate::settings;
+use crate::tailscale;
 use crate::vault;
 
 #[tauri::command]
@@ -150,11 +152,38 @@ pub fn import_preview(state: State<AppState>) -> Result<ImportPreview, String> {
     api::import_preview(&state)
 }
 
-/// The addresses to open on the phone. Desktop only: it is the machine that
-/// knows where it can be reached.
+// Serving the vault to the phone is the machine's business, so these are
+// desktop-only: the phone is looking at a server, not running one.
+
 #[tauri::command]
-pub fn server_address(address: State<serve::Address>) -> Vec<serve::Link> {
-    serve::links(&address.token)
+pub fn server_state(control: State<serve::Control>) -> serve::ServerState {
+    control.state()
+}
+
+/// Applies the switches and answers with what became true, so the panel never
+/// draws a state the machine did not reach.
+#[tauri::command]
+pub fn set_server(
+    control: State<serve::Control>,
+    serving: bool,
+    local_network: bool,
+    tailscale: bool,
+) -> Result<serve::ServerState, String> {
+    control.apply(settings::Settings { serving, local_network, tailscale })?;
+    Ok(control.state())
+}
+
+/// Walks the same chain the phone walks and names the link that broke.
+#[tauri::command]
+pub fn test_connection(control: State<serve::Control>, local: bool) -> Vec<tailscale::Step> {
+    if local {
+        match serve::local_address() {
+            Some(address) => vec![tailscale::reach_local(&address, control.state().port)],
+            None => Vec::new(),
+        }
+    } else {
+        tailscale::test(control.state().port)
+    }
 }
 
 // The Notes.app import stays here, and only here. It reaches outside the vault,

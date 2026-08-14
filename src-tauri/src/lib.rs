@@ -9,6 +9,8 @@ mod ocr;
 mod parse;
 mod search;
 mod serve;
+mod settings;
+mod tailscale;
 mod topics;
 pub mod vault;
 mod watch;
@@ -33,10 +35,15 @@ pub fn run() {
                 root: root.clone(),
             });
             watch::spawn(app.handle().clone(), root.clone());
-            // Losing the web server must not take the window down with it.
-            match serve::spawn(root) {
-                Ok(token) => {
-                    app.manage(serve::Address::new(token));
+
+            // Losing the web server must not take the window down with it: the
+            // desktop works exactly the same without it.
+            match serve::Control::new(root) {
+                Ok(control) => {
+                    if let Err(error) = control.apply(control.settings()) {
+                        eprintln!("[cortex] sem servidor web: {error}");
+                    }
+                    app.manage(control);
                 }
                 Err(error) => eprintln!("[cortex] sem servidor web: {error:#}"),
             }
@@ -53,7 +60,9 @@ pub fn run() {
             commands::get_asset,
             commands::import_preview,
             commands::import_notes,
-            commands::server_address,
+            commands::server_state,
+            commands::set_server,
+            commands::test_connection,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,
@@ -66,6 +75,15 @@ pub fn run() {
             commands::add_to_topic,
             commands::remove_from_topic,
         ])
+        .on_window_event(|window, event| {
+            // The tailnet mapping points at this process. Leaving it up after
+            // the process is gone means an address that answers with nothing.
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(control) = window.try_state::<serve::Control>() {
+                    control.shut_everything_down();
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

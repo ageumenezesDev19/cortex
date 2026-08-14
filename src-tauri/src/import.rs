@@ -122,7 +122,7 @@ fn body_of(id: &str, destination: &Path) -> Result<()> {
         .status()?;
 
     if !status.success() {
-        return Err(anyhow!("não consegui ler o corpo da nota"));
+        return Err(anyhow!("o corpo da nota não pôde ser lido"));
     }
     Ok(())
 }
