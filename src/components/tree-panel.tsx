@@ -20,7 +20,8 @@ type Props = {
   tree: TreeEntry[]
   activePath: string | null
   onClose: () => void
-  onOpenNote: (path: string) => void
+  /** The whole entry, because opening a note and opening an image differ. */
+  onOpen: (entry: TreeEntry) => void
   onCreateNote: (folder: string) => void
   onCreateFolder: (parent: string) => void
   onRename: (entry: TreeEntry) => void
@@ -37,7 +38,7 @@ export function TreePanel({
   tree,
   activePath,
   onClose,
-  onOpenNote,
+  onOpen,
   onCreateNote,
   onCreateFolder,
   onRename,
@@ -81,7 +82,7 @@ export function TreePanel({
                 entry={entry}
                 depth={0}
                 activePath={activePath}
-                onOpenNote={onOpenNote}
+                onOpen={onOpen}
                 onCreateNote={onCreateNote}
                 onCreateFolder={onCreateFolder}
                 onRename={onRename}
@@ -105,7 +106,7 @@ function Node({
   entry,
   depth,
   activePath,
-  onOpenNote,
+  onOpen,
   onCreateNote,
   onCreateFolder,
   onRename,
@@ -115,7 +116,7 @@ function Node({
   depth: number
 } & Pick<
   Props,
-  "activePath" | "onOpenNote" | "onCreateNote" | "onCreateFolder" | "onRename" | "onDelete"
+  "activePath" | "onOpen" | "onCreateNote" | "onCreateFolder" | "onRename" | "onDelete"
 >) {
   const [expanded, setExpanded] = useState(depth === 0)
   const isFolder = entry.kind === "folder"
@@ -126,7 +127,7 @@ function Node({
       <div className="group flex items-center gap-0.5">
         <button
           type="button"
-          onClick={() => (isFolder ? setExpanded((value) => !value) : onOpenNote(entry.path))}
+          onClick={() => (isFolder ? setExpanded((value) => !value) : onOpen(entry))}
           aria-expanded={isFolder ? expanded : undefined}
           aria-current={activePath === entry.path}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
@@ -183,7 +184,7 @@ function Node({
               entry={child}
               depth={depth + 1}
               activePath={activePath}
-              onOpenNote={onOpenNote}
+              onOpen={onOpen}
               onCreateNote={onCreateNote}
               onCreateFolder={onCreateFolder}
               onRename={onRename}

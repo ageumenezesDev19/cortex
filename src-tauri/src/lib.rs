@@ -39,6 +39,7 @@ pub fn run() {
             commands::list_tree,
             commands::create_note,
             commands::suggest_placement,
+            commands::get_asset,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

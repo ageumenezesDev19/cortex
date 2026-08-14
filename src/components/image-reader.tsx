@@ -1,12 +1,16 @@
 import { motion, useReducedMotion } from "motion/react"
+import { useEffect, useState } from "react"
 
-import { assetUrl, type Hit, type OcrBlock } from "../lib/api"
+import { assetUrl, getAsset, type OcrBlock } from "../lib/api"
 import { matchingBlocks } from "../lib/snippet"
 
 type Props = {
-  hit: Hit
-  query: string
+  path: string
   root: string
+  /** Boxes already in hand from a search result; loaded by path otherwise. */
+  blocks?: OcrBlock[]
+  /** What was searched, if anything. Nothing searched, nothing framed. */
+  query?: string
 }
 
 /**
@@ -14,16 +18,30 @@ type Props = {
  * recognised text draws itself around the line you searched for — it explains
  * the product without a caption, which is why nothing else gets to use it.
  */
-export function ImageReader({ hit, query, root }: Props) {
+export function ImageReader({ path, root, blocks, query = "" }: Props) {
   const reduceMotion = useReducedMotion()
-  const matched = matchingBlocks(hit.blocks, query)
+  const [loaded, setLoaded] = useState<OcrBlock[]>(blocks ?? [])
+
+  useEffect(() => {
+    if (blocks) return setLoaded(blocks)
+
+    let active = true
+    getAsset(path)
+      .then((asset) => active && setLoaded(asset.blocks))
+      .catch(() => active && setLoaded([]))
+    return () => {
+      active = false
+    }
+  }, [path, blocks])
+
+  const matched = query.trim() ? matchingBlocks(loaded, query) : []
 
   return (
     <figure className="flex h-full flex-col gap-4">
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border bg-muted">
         <img
-          src={assetUrl(root, hit.path)}
-          alt={hit.blocks.map((block) => block.text).join(" ")}
+          src={assetUrl(root, path)}
+          alt={loaded.map((block) => block.text).join(" ")}
           className="size-full object-contain"
           draggable={false}
         />
@@ -39,10 +57,15 @@ export function ImageReader({ hit, query, root }: Props) {
       </div>
 
       <figcaption className="shrink-0 font-mono text-xs text-muted-foreground">
-        {hit.path}
+        {path}
         {matched.length > 0 && (
           <span className="ml-2 text-foreground">
             {matched.length} {matched.length === 1 ? "trecho" : "trechos"} no print
+          </span>
+        )}
+        {matched.length === 0 && loaded.length > 0 && (
+          <span className="ml-2">
+            {loaded.length} {loaded.length === 1 ? "linha lida" : "linhas lidas"}
           </span>
         )}
       </figcaption>

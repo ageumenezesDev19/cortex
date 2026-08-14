@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
@@ -97,11 +97,13 @@ pub fn vault_status(state: State<AppState>) -> Result<VaultStatus, String> {
 /// Copies dropped screenshots into the vault. The watcher notices them there and
 /// runs OCR — the same path a file saved from the Finder takes.
 #[tauri::command]
-pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<u32, String> {
+pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<Vec<String>, String> {
     let target = state.root.join("inbox").join(vault::ASSETS_DIR);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
 
-    let mut copied = 0;
+    // Paths rather than a tally: the notice that follows a drop has to name the
+    // screenshot it is talking about.
+    let mut copied = Vec::new();
     for path in paths {
         let source = PathBuf::from(&path);
         if !vault::is_image(&source) {
@@ -119,7 +121,9 @@ pub fn import_images(state: State<AppState>, paths: Vec<String>) -> Result<u32, 
             attempt += 1;
         }
         if std::fs::copy(&source, &destination).is_ok() {
-            copied += 1;
+            if let Ok(relative) = vault::relative(&state.root, &destination) {
+                copied.push(relative);
+            }
         }
     }
     Ok(copied)
@@ -143,13 +147,52 @@ pub fn create_note(
     folder: String,
     title: String,
     topics: Option<Vec<String>>,
+    // A screenshot to bring along: moved next to the note and embedded at the top.
+    embed: Option<String>,
 ) -> Result<String, String> {
     let path = files::create_note(&state.root, &folder, &title).map_err(|e| e.to_string())?;
+
+    if let Some(image) = embed.filter(|image| !image.is_empty()) {
+        let moved =
+            files::move_into_assets(&state.root, &image, &path).map_err(|e| e.to_string())?;
+        topics::retarget(&state.root, &image, Some(&moved)).map_err(|e| e.to_string())?;
+
+        let name = moved.rsplit('/').next().unwrap_or(&moved);
+        let source = format!("# {title}\n\n![]({}/{name})\n\n", vault::ASSETS_DIR);
+        files::write_note(&state.root, &path, &source).map_err(|e| e.to_string())?;
+    }
 
     for slug in topics.unwrap_or_default() {
         topics::add_member(&state.root, &slug, &path).map_err(|e| e.to_string())?;
     }
     Ok(path)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetContent {
+    pub path: String,
+    pub blocks: Vec<crate::ocr::OcrBlock>,
+}
+
+/// An image opened from the tree, where there is no search result to carry the
+/// recognised boxes.
+#[tauri::command]
+pub fn get_asset(state: State<AppState>, path: String) -> Result<AssetContent, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let ocr_json: Option<String> = conn
+        .query_row("SELECT ocr_json FROM assets WHERE path = ?1", [&path], |row| row.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+
+    Ok(AssetContent {
+        path,
+        blocks: ocr_json
+            .and_then(|raw| serde_json::from_str::<crate::ocr::OcrResult>(raw.as_str()).ok())
+            .map(|ocr| ocr.blocks)
+            .unwrap_or_default(),
+    })
 }
 
 #[derive(Debug, Default, Serialize)]

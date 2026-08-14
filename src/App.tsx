@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ConfirmDialog } from "./components/confirm-dialog"
+import { DropToast, type Dropped } from "./components/drop-toast"
 import { CreateDialog } from "./components/create-dialog"
 import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
@@ -52,7 +53,7 @@ type Source = "search" | "tree"
 
 type Open =
   | { kind: "note"; path: string; anchorStart: number | null; from: Source }
-  | { kind: "image"; hit: Hit; from: Source }
+  | { kind: "image"; path: string; blocks?: Hit["blocks"]; from: Source }
   | null
 
 type Ask =
@@ -80,6 +81,9 @@ export default function App() {
   const [ask, setAsk] = useState<Ask>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [creating, setCreating] = useState<string | null>(null)
+  const [dropped, setDropped] = useState<Dropped | null>(null)
+  // Set only when a note is being created out of a dropped screenshot.
+  const [embedding, setEmbedding] = useState<string | null>(null)
 
   const reduceMotion = useReducedMotion()
   const results = useRef<HTMLDivElement>(null)
@@ -122,6 +126,13 @@ export default function App() {
     refreshTree()
   }, [indexedChunks, refreshTree])
 
+  // The notice follows the real pipeline rather than a timer: the screenshot is
+  // only "searchable" once the indexer has stopped working on it.
+  useEffect(() => {
+    if (!dropped || dropped.read) return
+    if (status?.phase === "idle") setDropped({ ...dropped, read: true })
+  }, [status, dropped])
+
   // Screenshots dropped on the window land in the vault; the watcher takes it
   // from there, exactly as if they had been saved from the Finder.
   useEffect(() => {
@@ -130,7 +141,12 @@ export default function App() {
       if (event.payload.type === "leave") return setDropping(false)
       if (event.payload.type !== "drop") return
       setDropping(false)
-      importImages(event.payload.paths).catch(() => {})
+      importImages(event.payload.paths)
+        .then((written) => {
+          const last = written[written.length - 1]
+          if (last) setDropped({ path: last, read: false })
+        })
+        .catch(() => {})
     })
     return () => {
       unlisten.then((stop) => stop())
@@ -174,7 +190,7 @@ export default function App() {
   const openHit = useCallback((hit: Hit) => {
     setOpen(
       hit.kind === "image"
-        ? { kind: "image", hit, from: "search" }
+        ? { kind: "image", path: hit.path, blocks: hit.blocks, from: "search" }
         : { kind: "note", path: hit.path, anchorStart: hit.startOffset, from: "search" },
     )
   }, [])
@@ -263,7 +279,7 @@ export default function App() {
     [reduceMotion],
   )
 
-  const openPath = open?.kind === "note" ? open.path : null
+  const openPath = open?.path ?? null
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -293,7 +309,13 @@ export default function App() {
         tree={tree}
         activePath={openPath}
         onClose={() => setPanel("none")}
-        onOpenNote={(path) => setOpen({ kind: "note", path, anchorStart: null, from: "tree" })}
+        onOpen={(entry) =>
+          setOpen(
+            entry.kind === "image"
+              ? { kind: "image", path: entry.path, from: "tree" }
+              : { kind: "note", path: entry.path, anchorStart: null, from: "tree" },
+          )
+        }
         onCreateNote={(folder) => setCreating(folder)}
         onCreateFolder={(parent) => setAsk({ kind: "new-folder", parent })}
         onRename={(entry) => setAsk({ kind: "rename", entry })}
@@ -383,7 +405,13 @@ export default function App() {
             {open && (
               <div className="min-h-0 min-w-0 flex-1 rounded-lg border bg-card p-4">
                 {open.kind === "image" ? (
-                  <ImageReader hit={open.hit} query={query} root={vault?.root ?? ""} />
+                  <ImageReader
+                    key={open.path}
+                    path={open.path}
+                    blocks={open.blocks}
+                    query={query}
+                    root={vault?.root ?? ""}
+                  />
                 ) : (
                   <NotePanel
                     key={open.path}
@@ -429,14 +457,32 @@ export default function App() {
         }}
       />
 
+      <DropToast
+        dropped={dropped}
+        root={vault?.root ?? ""}
+        onDismiss={() => setDropped(null)}
+        onOpen={(path) => {
+          setOpen({ kind: "image", path, from: "tree" })
+          setDropped(null)
+        }}
+        onCreateNote={(path) => {
+          setEmbedding(path)
+          setCreating("")
+          setDropped(null)
+        }}
+      />
+
       <CreateDialog
         open={creating !== null}
         tree={tree}
         topics={topics}
         startingFolder={creating ?? ""}
-        onCancel={() => setCreating(null)}
+        onCancel={() => {
+          setCreating(null)
+          setEmbedding(null)
+        }}
         onCreate={(title, folder, chosen) => {
-          createNote(folder, title, chosen)
+          createNote(folder, title, chosen, embedding)
             .then((path) => {
               setOpen({ kind: "note", path, anchorStart: null, from: "tree" })
               refreshTree()
@@ -444,6 +490,7 @@ export default function App() {
             })
             .catch(() => {})
           setCreating(null)
+          setEmbedding(null)
         }}
       />
 

@@ -166,7 +166,10 @@ fn read_level(root: &Path, dir: &Path) -> Result<Vec<TreeEntry>> {
 
     for entry in std::fs::read_dir(dir)?.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if is_ignored(root, &path) {
+        // `is_ignored` lets `.topics/` through so the watcher can see topics
+        // change. The tree is a different question — the app's own folders are
+        // not the user's vault, and they have no business being browsable.
+        if is_ignored(root, &path) || is_topic_manifest(root, &path) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
@@ -269,6 +272,29 @@ mod tests {
         assert!(safe_name(".oculta").is_err());
         assert!(safe_name("   ").is_err());
         assert_eq!(safe_name("  Server Actions  ").unwrap(), "Server Actions");
+    }
+
+    #[test]
+    fn the_tree_never_shows_the_app_its_own_folders() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for folder in [".index", ".topics", "react"] {
+            std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(dir.path().join(".topics/react.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("react/hooks.md"), "# Hooks").unwrap();
+        std::fs::write(dir.path().join("react/print.png"), b"x").unwrap();
+        std::fs::write(dir.path().join("react/print.ocr.json"), "{}").unwrap();
+
+        let names: Vec<String> = tree(dir.path()).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["react"], "vazou pasta interna para a árvore");
+
+        let inside: Vec<String> = tree(dir.path()).unwrap()[0]
+            .children
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        // The sidecar belongs to the image, not to the person browsing.
+        assert_eq!(inside, ["hooks.md", "print.png"]);
     }
 
     #[test]

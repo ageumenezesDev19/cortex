@@ -85,7 +85,17 @@ export const getNote = (path: string) => invoke<NoteContent>("get_note", { path 
 
 export const vaultStatus = () => invoke<VaultStatus>("vault_status")
 
-export const importImages = (paths: string[]) => invoke<number>("import_images", { paths })
+/** Returns the vault-relative paths it wrote, so the notice can name them. */
+export const importImages = (paths: string[]) =>
+  invoke<string[]>("import_images", { paths })
+
+/** An image opened from the tree, where no search result carries its boxes. */
+export type AssetContent = {
+  path: string
+  blocks: OcrBlock[]
+}
+
+export const getAsset = (path: string) => invoke<AssetContent>("get_asset", { path })
 
 export const listTree = () => invoke<TreeEntry[]>("list_tree")
 
@@ -98,8 +108,13 @@ export type Placement = {
 export const suggestPlacement = (title: string) =>
   invoke<Placement>("suggest_placement", { title })
 
-export const createNote = (folder: string, title: string, topics: string[] = []) =>
-  invoke<string>("create_note", { folder, title, topics })
+export const createNote = (
+  folder: string,
+  title: string,
+  topics: string[] = [],
+  /** A dropped screenshot to move next to the note and embed at the top. */
+  embed: string | null = null,
+) => invoke<string>("create_note", { folder, title, topics, embed })
 
 export const writeNote = (path: string, source: string) =>
   invoke<void>("write_note", { path, source })

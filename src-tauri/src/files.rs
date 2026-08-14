@@ -93,6 +93,42 @@ pub fn delete(root: &Path, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Moves a screenshot into the `_assets/` folder beside a note and returns its
+/// new path relative to the vault. Topic membership is the caller's problem —
+/// see `topics::retarget`.
+///
+/// The `.ocr.json` travels with the image: leaving it behind would orphan it and
+/// make the watcher pay for the recognition a second time.
+pub fn move_into_assets(root: &Path, image: &str, note: &str) -> Result<String> {
+    let source = vault::resolve(root, image)?;
+    let note_path = vault::resolve(root, note)?;
+    let assets = note_path
+        .parent()
+        .ok_or_else(|| anyhow!("nota sem pasta"))?
+        .join(vault::ASSETS_DIR);
+
+    let name = source
+        .file_name()
+        .ok_or_else(|| anyhow!("imagem sem nome"))?
+        .to_owned();
+    let destination = assets.join(&name);
+
+    if destination == source {
+        return vault::relative(root, &source);
+    }
+    std::fs::create_dir_all(&assets)?;
+    if destination.exists() {
+        return Err(anyhow!("já existe uma imagem com esse nome ao lado da nota"));
+    }
+    std::fs::rename(&source, &destination)?;
+
+    let sidecar = ocr::json_path(&source);
+    if sidecar.exists() {
+        let _ = std::fs::rename(&sidecar, ocr::json_path(&destination));
+    }
+    vault::relative(root, &destination)
+}
+
 /// Writes a pasted screenshot beside its note and returns the markdown to
 /// insert. OCR is not this function's business — the watcher picks the file up.
 pub fn paste_image(root: &Path, note_path: &str, bytes: &[u8], extension: &str) -> Result<String> {
@@ -207,5 +243,49 @@ mod tests {
         let dir = TempDir::new().unwrap();
         assert!(write_note(dir.path(), "config.json", "{}").is_err());
         assert!(write_note(dir.path(), "../fora.md", "oi").is_err());
+    }
+
+    #[test]
+    fn a_moved_image_takes_its_ocr_sidecar_with_it() {
+        let dir = TempDir::new().unwrap();
+        let inbox = dir.path().join("inbox").join(vault::ASSETS_DIR);
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("print.png"), b"x").unwrap();
+        std::fs::write(inbox.join("print.ocr.json"), b"{}").unwrap();
+
+        let note = create_note(dir.path(), "react", "Hooks").unwrap();
+        let moved = move_into_assets(dir.path(), "inbox/_assets/print.png", &note).unwrap();
+
+        assert_eq!(moved, "react/_assets/print.png");
+        assert!(dir.path().join("react/_assets/print.ocr.json").exists());
+        assert!(!inbox.join("print.png").exists(), "sobrou no inbox");
+        assert!(!inbox.join("print.ocr.json").exists(), "sidecar ficou órfão");
+    }
+
+    #[test]
+    fn moving_an_image_that_is_already_there_is_a_no_op() {
+        let dir = TempDir::new().unwrap();
+        let note = create_note(dir.path(), "react", "Hooks").unwrap();
+        let assets = dir.path().join("react").join(vault::ASSETS_DIR);
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("print.png"), b"x").unwrap();
+
+        let moved = move_into_assets(dir.path(), "react/_assets/print.png", &note).unwrap();
+        assert_eq!(moved, "react/_assets/print.png");
+        assert!(assets.join("print.png").exists());
+    }
+
+    #[test]
+    fn moving_never_overwrites_an_image_already_at_the_destination() {
+        let dir = TempDir::new().unwrap();
+        let note = create_note(dir.path(), "react", "Hooks").unwrap();
+        for folder in ["inbox/_assets", "react/_assets"] {
+            std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+            std::fs::write(dir.path().join(folder).join("print.png"), folder.as_bytes()).unwrap();
+        }
+
+        assert!(move_into_assets(dir.path(), "inbox/_assets/print.png", &note).is_err());
+        let kept = std::fs::read(dir.path().join("react/_assets/print.png")).unwrap();
+        assert_eq!(kept, b"react/_assets");
     }
 }
