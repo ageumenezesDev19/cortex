@@ -15,6 +15,10 @@ pub struct Manifest {
     pub icon: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// Filled in by the app rather than by you. The panel keeps these apart so
+    /// a dozen machine-made marks cannot bury the topics you curated.
+    #[serde(default)]
+    pub auto: bool,
     /// Note **or** image paths, relative to the vault root. A manifest is used
     /// instead of frontmatter precisely because images have no frontmatter.
     #[serde(default)]
@@ -28,6 +32,8 @@ pub struct Topic {
     pub name: String,
     pub icon: Option<String>,
     pub color: Option<String>,
+    #[serde(default)]
+    pub auto: bool,
     pub members: Vec<String>,
 }
 
@@ -67,6 +73,7 @@ fn read(path: &Path) -> Result<Topic> {
         name: manifest.name,
         icon: manifest.icon,
         color: manifest.color,
+        auto: manifest.auto,
         members: manifest.members,
     })
 }
@@ -81,6 +88,7 @@ pub fn save(root: &Path, topic: &Topic) -> Result<()> {
         name: topic.name.clone(),
         icon: topic.icon.clone(),
         color: topic.color.clone(),
+        auto: topic.auto,
         members: topic.members.clone(),
     };
     std::fs::write(
@@ -130,6 +138,25 @@ pub use crate::vault::slugify;
 
 /// Files a path under a topic. Reads the manifest fresh every time, so adding a
 /// member can never be the thing that drops the others.
+/// Files a screenshot under a mark, creating the topic the first time that
+/// mark is seen. Marked as `auto` so the panel can keep it out of your own list.
+pub fn add_auto_member(root: &Path, slug: &str, name: &str, icon: Option<&str>, path: &str) -> Result<()> {
+    if load(root, slug).is_err() {
+        save(
+            root,
+            &Topic {
+                slug: slug.to_string(),
+                name: name.to_string(),
+                icon: icon.map(str::to_string),
+                color: None,
+                auto: true,
+                members: Vec::new(),
+            },
+        )?;
+    }
+    add_member(root, slug, path)
+}
+
 pub fn add_member(root: &Path, slug: &str, path: &str) -> Result<()> {
     let mut topic = load(root, slug)?;
     if topic.members.iter().any(|member| member == path) {
@@ -191,6 +218,7 @@ mod tests {
                 name: "React".into(),
                 icon: None,
                 color: None,
+                auto: false,
                 members: members.iter().map(|m| m.to_string()).collect(),
             },
         )

@@ -1,6 +1,6 @@
 import { ChevronLeft, Plus, Trash2, X } from "lucide-react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { useState } from "react"
+import { Fragment, useState } from "react"
 
 import type { Topic } from "../lib/api"
 import { cn } from "../lib/utils"
@@ -23,6 +23,18 @@ type Props = {
  * is the whole design: browsing and searching are the same gesture, so this
  * panel never becomes a second place to be.
  */
+/**
+ * Yours, then the app's, with the boundary marked. Sorting rather than two
+ * lists keeps one scroll and one keyboard order.
+ */
+function ordered(topics: Topic[]) {
+  const sorted = [...topics].sort((a, b) => Number(a.auto) - Number(b.auto))
+  return sorted.map((topic, at) => ({
+    topic,
+    startsAuto: topic.auto && !sorted[at - 1]?.auto,
+  }))
+}
+
 export function TopicsPanel({
   open,
   topics,
@@ -70,9 +82,16 @@ export function TopicsPanel({
           </header>
 
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-            {topics.map((topic, position) => (
+            {/* Yours first, always. A dozen marks the app made for itself must
+                not bury the handful you curated. */}
+            {ordered(topics).map(({ topic, startsAuto }, position) => (
+              <Fragment key={topic.slug}>
+                {startsAuto && (
+                  <p className="px-2 pb-1 pt-3 font-mono text-xs uppercase tracking-wide text-muted-foreground">
+                    automáticos
+                  </p>
+                )}
               <motion.div
-                key={topic.slug}
                 initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{
@@ -106,6 +125,7 @@ export function TopicsPanel({
                   <Trash2 className="size-3.5" aria-hidden />
                 </button>
               </motion.div>
+              </Fragment>
             ))}
 
             {topics.length === 0 && !creating && (

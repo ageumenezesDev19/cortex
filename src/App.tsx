@@ -12,6 +12,7 @@ import { NotePanel } from "./components/note-panel"
 import { PromptDialog } from "./components/prompt-dialog"
 import { Rail } from "./components/rail"
 import { AnswerPanel } from "./components/answer-panel"
+import { ClassifyPanel } from "./components/classify-panel"
 import { SharePanel } from "./components/share-panel"
 import { ResultGroup } from "./components/result-group"
 import { SearchField } from "./components/search-field"
@@ -22,6 +23,8 @@ import {
   addToTopic,
   aiStatus,
   ask as askVault,
+  classifyExisting,
+  classifyPreview,
   createFolder,
   createNote,
   createTopic,
@@ -34,6 +37,7 @@ import {
   isDesktop,
   listTopics,
   listTree,
+  onClassifyStatus,
   onImportStatus,
   onIndexStatus,
   renameEntry,
@@ -41,6 +45,7 @@ import {
   vaultStatus,
   type AiAnswer,
   type AiStatus,
+  type ClassifyStatus,
   type Group,
   type Hit,
   type Source as Citation,
@@ -106,6 +111,9 @@ export default function App() {
   const [answering, setAnswering] = useState(false)
   const [answerError, setAnswerError] = useState<string | null>(null)
   const [ai, setAi] = useState<AiStatus | null>(null)
+  const [classifying, setClassifying] = useState(false)
+  const [classifyPending, setClassifyPending] = useState<number | null>(null)
+  const [classifyStatus, setClassifyStatus] = useState<ClassifyStatus | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
@@ -142,9 +150,11 @@ export default function App() {
 
     const stopStatus = onIndexStatus(setStatus)
     const stopImport = onImportStatus(setImportStatus)
+    const stopClassify = onClassifyStatus(setClassifyStatus)
     return () => {
       stopStatus()
       stopImport()
+      stopClassify()
     }
   }, [refreshTopics, refreshTree])
 
@@ -342,6 +352,14 @@ export default function App() {
         onNewNote={() => setCreating("")}
         onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
         onShare={() => setSharing(true)}
+        onClassify={() => {
+          setClassifying(true)
+          setClassifyStatus(null)
+          setClassifyPending(null)
+          classifyPreview()
+            .then(setClassifyPending)
+            .catch(() => setClassifyPending(0))
+        }}
         onSendPhoto={() => photo.current?.click()}
         onImport={() => {
           setImporting(true)
@@ -541,6 +559,17 @@ export default function App() {
           uploadImage(file)
             .then((path) => setDropped({ path, read: false }))
             .catch(() => {})
+        }}
+      />
+
+      <ClassifyPanel
+        open={classifying}
+        pending={classifyPending}
+        status={classifyStatus}
+        onCancel={() => setClassifying(false)}
+        onStart={() => {
+          setClassifyStatus(null)
+          classifyExisting().catch(() => {})
         }}
       />
 

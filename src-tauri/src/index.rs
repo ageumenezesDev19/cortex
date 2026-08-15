@@ -120,15 +120,31 @@ impl Indexer {
     }
 
     pub fn index_asset(&mut self, abs: &Path, ocr: &OcrResult) -> Result<()> {
-        let rel = vault::relative(&self.root, abs)?;
-        let mtime = vault::mtime_of(abs);
         let note_id = self.owning_note(abs)?;
+        let root = self.root.clone();
+        index_asset_into(&mut self.conn, &root, abs, ocr, note_id)
+    }
+}
+
+/// The write itself, on a plain connection. Split out so the classify-existing
+/// pass can reindex a screenshot without owning the watcher's indexer — one
+/// place still decides what an image chunk looks like.
+pub fn index_asset_into(
+    conn: &mut Connection,
+    root: &Path,
+    abs: &Path,
+    ocr: &OcrResult,
+    note_id: Option<i64>,
+) -> Result<()> {
+    {
+        let rel = vault::relative(root, abs)?;
+        let mtime = vault::mtime_of(abs);
         let label = abs
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| rel.clone());
 
-        let tx = self.conn.transaction()?;
+        let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO assets (path, ocr_json, mtime, note_id)
              VALUES (?1, ?2, ?3, ?4)
@@ -140,18 +156,36 @@ impl Indexer {
         let asset_id: i64 =
             tx.query_row("SELECT id FROM assets WHERE path = ?1", [&rel], |r| r.get(0))?;
 
+        // The marks join the indexed text, so searching `css` finds a
+        // screenshot of a stylesheet even though the word never appears in it.
+        // They also join the heading, which the result card already shows —
+        // that is the line telling you why this screenshot came back.
+        let marks = ocr.marks.as_ref().map(|marks| marks.all()).unwrap_or_default();
+        let heading = if marks.is_empty() {
+            label.clone()
+        } else {
+            format!("{label} · {}", marks.join(" · "))
+        };
+        let text = if marks.is_empty() {
+            ocr.text.clone()
+        } else {
+            format!("{}\n{}", marks.join(" "), ocr.text)
+        };
+
         tx.execute("DELETE FROM chunks WHERE asset_id = ?1", [asset_id])?;
         if !ocr.text.trim().is_empty() {
             tx.execute(
                 "INSERT INTO chunks (asset_id, note_id, kind, heading_path, text)
                  VALUES (?1, ?2, 'image', ?3, ?4)",
-                params![asset_id, note_id, label, ocr.text],
+                params![asset_id, note_id, heading, text],
             )?;
         }
         tx.commit()?;
         Ok(())
     }
+}
 
+impl Indexer {
     pub fn remove_asset(&mut self, abs: &Path) -> Result<()> {
         let rel = vault::relative(&self.root, abs)?;
         self.conn

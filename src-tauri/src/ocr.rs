@@ -21,6 +21,12 @@ pub struct OcrResult {
     pub blocks: Vec<OcrBlock>,
     pub lang: String,
     pub ocr_at: String,
+    /// What the screenshot is about. `None` means never classified; `Some`
+    /// that carries nothing means classified and found to be nothing in
+    /// particular — the difference is what stops a bare screenshot from being
+    /// sent to the model on every reindex.
+    #[serde(default)]
+    pub marks: Option<crate::classify::Marks>,
 }
 
 /// `print-01.png` → `print-01.ocr.json`, sitting next to the image so the vault
@@ -53,6 +59,13 @@ pub fn ensure(app: &AppHandle, image: &Path) -> Result<OcrResult> {
     let result = run_helper(app, image)?;
     std::fs::write(json_path(image), serde_json::to_vec_pretty(&result)?)?;
     Ok(result)
+}
+
+/// Rewrites the sidecar after the marks are decided, so the next index reads
+/// them instead of asking again.
+pub fn save(image: &Path, result: &OcrResult) -> Result<()> {
+    std::fs::write(json_path(image), serde_json::to_vec_pretty(result)?)?;
+    Ok(())
 }
 
 fn run_helper(app: &AppHandle, image: &Path) -> Result<OcrResult> {

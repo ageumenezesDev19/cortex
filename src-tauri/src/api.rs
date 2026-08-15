@@ -322,6 +322,8 @@ pub fn create_topic(
         name: name.trim().to_string(),
         icon,
         color,
+        // Made by hand, so it belongs in your own list.
+        auto: false,
         members: Vec::new(),
     };
     topics::save(&state.root, &topic).map_err(|e| e.to_string())?;
@@ -375,6 +377,60 @@ pub fn ask(state: &AppState, question: &str) -> Answer<crate::ask::Answer> {
         &settings.excluded,
         (&settings.groq_model, &settings.gemini_model),
     )
+}
+
+/// Screenshots that have OCR but were never classified. Reindexing never
+/// happens on its own — the app must not start rewriting your vault out of
+/// nowhere — so this only counts, for the confirmation to state.
+pub fn classify_pending(state: &AppState) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(&state.root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .filter(|path| path.is_file() && !vault::is_ignored(&state.root, path))
+        .filter(|path| vault::is_image(path))
+        .filter(|path| {
+            crate::ocr::read_cached(path).is_some_and(|cached| cached.marks.is_none())
+        })
+        .collect()
+}
+
+/// Classifies one screenshot that already has OCR and files it under its marks.
+/// Returns whether it gained any.
+pub fn classify_one(state: &AppState, image: &Path) -> Answer<bool> {
+    let Some(mut cached) = crate::ocr::read_cached(image) else {
+        return Ok(false);
+    };
+    if cached.marks.is_some() {
+        return Ok(false);
+    }
+
+    let settings = crate::settings::load(&state.root);
+    let relative = vault::relative(&state.root, image).map_err(|e| e.to_string())?;
+    let may_ask = !crate::ask::is_excluded(&relative, &settings.excluded);
+
+    let marks = crate::classify::marks(
+        &state.root,
+        &cached.text,
+        (&settings.groq_model, &settings.gemini_model),
+        may_ask,
+    );
+    let gained = !marks.is_empty();
+
+    for mark in marks.all() {
+        let (name, icon) = crate::classify::presentation(&mark);
+        let slug = crate::classify::slug_of(&mark);
+        topics::add_auto_member(&state.root, &slug, &name, icon, &relative)
+            .map_err(|e| e.to_string())?;
+    }
+
+    cached.marks = Some(marks);
+    crate::ocr::save(image, &cached).map_err(|e| e.to_string())?;
+
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    crate::index::index_asset_into(&mut conn, &state.root, image, &cached, None)
+        .map_err(|e| e.to_string())?;
+    Ok(gained)
 }
 
 /// Whether a key is configured — never the key. The panel needs to know if the

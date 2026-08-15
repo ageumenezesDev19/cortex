@@ -11,6 +11,7 @@ import {
   Search,
   Share2,
   Sun,
+  Tags,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -34,6 +35,7 @@ export function Rail({
   onImport,
   onShare,
   onSendPhoto,
+  onClassify,
 }: {
   panel: Panel
   onTogglePanel: (panel: Panel) => void
@@ -42,6 +44,7 @@ export function Rail({
   onImport: () => void
   onShare: () => void
   onSendPhoto: () => void
+  onClassify: () => void
 }) {
   return (
     // A column on the side of a window, a bar under a thumb on a phone. The
@@ -63,6 +66,7 @@ export function Rail({
         onNewFolder={onNewFolder}
         onImport={onImport}
         onSendPhoto={onSendPhoto}
+        onClassify={onClassify}
       />
       <span className="my-1 hidden h-px w-6 bg-border sm:block" aria-hidden />
 
@@ -132,11 +136,13 @@ function NewMenu({
   onNewFolder,
   onImport,
   onSendPhoto,
+  onClassify,
 }: {
   onNewNote: () => void
   onNewFolder: () => void
   onImport: () => void
   onSendPhoto: () => void
+  onClassify: () => void
 }) {
   const [open, setOpen] = useState(false)
 
@@ -198,6 +204,16 @@ function NewMenu({
                   onClick={() => {
                     setOpen(false)
                     onImport()
+                  }}
+                />
+                {/* Prints que chegam já são classificados; isto é para os que
+                    entraram antes, e só quando você mandar. */}
+                <MenuItem
+                  icon={Tags}
+                  label="Classificar prints"
+                  onClick={() => {
+                    setOpen(false)
+                    onClassify()
                   }}
                 />
               </>

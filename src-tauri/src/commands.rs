@@ -4,6 +4,8 @@
 //! grows a body, the phone stops being able to do what the Mac can.
 
 use serde::Serialize;
+use std::sync::Mutex;
+
 use tauri::{AppHandle, Emitter, State};
 
 use crate::api::{
@@ -170,6 +172,86 @@ pub fn set_excluded(state: State<AppState>, excluded: Vec<String>) -> Result<api
     current.excluded = excluded;
     settings::save(&state.root, &current)?;
     Ok(api::ai_status(&state))
+}
+
+pub const CLASSIFY_EVENT: &str = "classify:status";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClassifyStatus {
+    phase: &'static str,
+    done: u32,
+    total: u32,
+    current: String,
+    marked: u32,
+}
+
+/// How many screenshots are waiting, so the confirmation can say it before
+/// anything is touched.
+#[tauri::command]
+pub fn classify_preview(state: State<AppState>) -> usize {
+    api::classify_pending(&state).len()
+}
+
+/// Classifies the screenshots already in the vault. Never runs on its own —
+/// the app must not start rewriting things unasked — and reports as it goes,
+/// because a pass over a thousand images with no sign of life reads as a hang.
+#[tauri::command]
+pub fn classify_existing(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let pending = api::classify_pending(&state);
+    let root = state.root.clone();
+
+    std::thread::spawn(move || {
+        let state = AppState {
+            conn: Mutex::new(match crate::db::open(&crate::vault::db_path(&root)) {
+                Ok(conn) => conn,
+                Err(error) => {
+                    let _ = app.emit(
+                        CLASSIFY_EVENT,
+                        ClassifyStatus {
+                            phase: "failed",
+                            done: 0,
+                            total: 0,
+                            current: error.to_string(),
+                            marked: 0,
+                        },
+                    );
+                    return;
+                }
+            }),
+            root: root.clone(),
+        };
+
+        let total = pending.len() as u32;
+        let mut marked = 0;
+
+        for (at, image) in pending.iter().enumerate() {
+            let name = image
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let _ = app.emit(
+                CLASSIFY_EVENT,
+                ClassifyStatus {
+                    phase: "running",
+                    done: at as u32,
+                    total,
+                    current: name,
+                    marked,
+                },
+            );
+            if api::classify_one(&state, image).unwrap_or(false) {
+                marked += 1;
+            }
+        }
+
+        let _ = app.emit(
+            CLASSIFY_EVENT,
+            ClassifyStatus { phase: "done", done: total, total, current: String::new(), marked },
+        );
+    });
+
+    Ok(())
 }
 
 // Serving the vault to the phone is the machine's business, so these are

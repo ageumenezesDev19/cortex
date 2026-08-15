@@ -108,6 +108,8 @@ export type Topic = {
   name: string
   icon: string | null
   color: string | null
+  /** Filled in by the app from what a screenshot turned out to be. */
+  auto: boolean
   members: string[]
 }
 
@@ -310,6 +312,29 @@ export const aiStatus = () => call<AiStatus>("ai_status")
 /** Desktop only: what may leave this machine is the machine's decision. */
 export const setExcluded = (excluded: string[]) =>
   invoke<AiStatus>("set_excluded", { excluded })
+
+export type ClassifyStatus = {
+  phase: "running" | "done" | "failed"
+  done: number
+  total: number
+  current: string
+  /** How many turned out to be something; the rest stayed bare on purpose. */
+  marked: number
+}
+
+export const CLASSIFY_EVENT = "classify:status"
+
+/** Desktop only: reclassifying rewrites the vault, which is the machine's call. */
+export const classifyPreview = () => invoke<number>("classify_preview")
+
+export const classifyExisting = () => invoke<void>("classify_existing")
+
+/** Desktop fires an event; the phone never runs this, so there is nothing to hear. */
+export function onClassifyStatus(handler: (status: ClassifyStatus) => void): () => void {
+  if (!insideApp()) return () => {}
+  const stop = listen<ClassifyStatus>(CLASSIFY_EVENT, (event) => handler(event.payload))
+  return () => void stop.then((off) => off())
+}
 
 export const serverState = () => invoke<ServerState>("server_state")
 

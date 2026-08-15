@@ -1,11 +1,12 @@
 pub mod api;
 mod ask;
+pub mod classify;
 mod commands;
 mod db;
 mod files;
 pub mod html;
 pub mod import;
-mod index;
+pub mod index;
 mod ocr;
 mod parse;
 mod provider;
@@ -69,6 +70,8 @@ pub fn run() {
             commands::ask,
             commands::ai_status,
             commands::set_excluded,
+            commands::classify_preview,
+            commands::classify_existing,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

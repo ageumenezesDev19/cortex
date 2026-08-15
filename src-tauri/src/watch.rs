@@ -107,11 +107,50 @@ fn apply(app: &AppHandle, indexer: &mut Indexer, path: &Path) -> bool {
 
 fn run_ocr(app: &AppHandle, indexer: &mut Indexer, image: &Path) -> bool {
     match ocr::ensure(app, image) {
-        Ok(result) => indexer.index_asset(image, &result).is_ok(),
+        Ok(mut result) => {
+            classify(indexer.root(), image, &mut result);
+            indexer.index_asset(image, &result).is_ok()
+        }
         Err(error) => {
             eprintln!("[cortex] OCR failed for {}: {error:#}", image.display());
             false
         }
+    }
+}
+
+/// Decides what the screenshot is about, once, and writes it back into the
+/// sidecar. A screenshot that already carries marks is left alone even when
+/// they are empty — that is a verdict, not a gap.
+fn classify(root: &Path, image: &Path, result: &mut ocr::OcrResult) {
+    if result.marks.is_some() || result.text.trim().is_empty() {
+        return;
+    }
+    let settings = crate::settings::load(root);
+    let relative = vault::relative(root, image).unwrap_or_default();
+    // A screenshot under an excluded path is never sent anywhere, so the rule
+    // decides alone.
+    let may_ask = !crate::ask::is_excluded(&relative, &settings.excluded);
+
+    let marks = crate::classify::marks(
+        root,
+        &result.text,
+        (&settings.groq_model, &settings.gemini_model),
+        may_ask,
+    );
+
+    // A mark is also a topic, so the chip that already scopes the search can
+    // scope it to "only styling" without any new interface.
+    for mark in marks.all() {
+        let (name, icon) = crate::classify::presentation(&mark);
+        let slug = crate::classify::slug_of(&mark);
+        if let Err(error) = crate::topics::add_auto_member(root, &slug, &name, icon, &relative) {
+            eprintln!("[cortex] could not file {relative} under {slug}: {error:#}");
+        }
+    }
+
+    result.marks = Some(marks);
+    if let Err(error) = ocr::save(image, result) {
+        eprintln!("[cortex] could not store the marks for {}: {error:#}", image.display());
     }
 }
 
