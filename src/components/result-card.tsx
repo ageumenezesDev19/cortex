@@ -36,7 +36,10 @@ export function ResultCard({ hit, query, root, selected, onSelect, onOpen }: Pro
             {hit.headingPath}
           </span>
         )}
-        <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">
+        {/* A pasted URL has no spaces to break at, so it sets a minimum width
+            for the whole list and pushes it off the screen — which on a phone
+            costs the vertical scroll, not just the looks. */}
+        <span className="mt-1 block break-words text-sm leading-relaxed text-muted-foreground">
           {parseSnippet(hit.snippet).map((segment, position) =>
             segment.found ? (
               <mark key={position} className="rounded-sm bg-found px-0.5 text-found-foreground">

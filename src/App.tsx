@@ -377,7 +377,10 @@ export default function App() {
         topics={topics}
         activeSlug={topic?.slug ?? null}
         onClose={() => setPanel("none")}
-        onPick={(picked) => setTopic(picked.slug === topic?.slug ? null : picked)}
+        onPick={(picked) => {
+          setTopic(picked.slug === topic?.slug ? null : picked)
+          if (narrow()) setPanel("none")
+        }}
         onCreate={(name, icon, color) => {
           createTopic(name, icon, color)
             .then(refreshTopics)
@@ -391,13 +394,17 @@ export default function App() {
         tree={tree}
         activePath={openPath}
         onClose={() => setPanel("none")}
-        onOpen={(entry) =>
+        onOpen={(entry) => {
           setOpen(
             entry.kind === "image"
               ? { kind: "image", path: entry.path, from: "tree" }
               : { kind: "note", path: entry.path, anchorStart: null, from: "tree" },
           )
-        }
+          // On a phone the panel is the whole screen, so leaving it open means
+          // opening a note behind a wall. On a desktop it is a column beside
+          // the reader and stays where it is.
+          if (narrow()) setPanel("none")
+        }}
         onCreateNote={(folder) => setCreating(folder)}
         onCreateFolder={(parent) => setAsk({ kind: "new-folder", parent })}
         onRename={(entry) => setAsk({ kind: "rename", entry })}
@@ -440,7 +447,12 @@ export default function App() {
               <div
                 ref={results}
                 className={cn(
-                  "min-h-0 space-y-3 overflow-y-auto",
+                  // `min-w-0` lets this shrink below its content, and
+                  // `overflow-x-hidden` keeps the CSS rule that turns a
+                  // `visible` axis into `auto` from handing the touch gesture
+                  // to the horizontal — which is what stopped the list
+                  // scrolling at all on the phone.
+                  "min-h-0 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden",
                   open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
@@ -731,6 +743,9 @@ function confirmLabel(confirm: Confirm) {
 
 /** A vault with nothing in it should say what to do, not shrug — and the way to
  *  start writing belongs here, not inside a panel you have to know about. */
+/** Whether the panels are covering the screen rather than sitting beside it. */
+const narrow = () => !window.matchMedia("(min-width: 640px)").matches
+
 /** A search that ends in a question mark is a question. */
 const isQuestion = (query: string) => query.trim().endsWith("?") && query.trim().length > 2
 

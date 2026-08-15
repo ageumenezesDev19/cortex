@@ -75,16 +75,30 @@ export function SearchField({
         autoCapitalize="off"
         autoCorrect="off"
         enterKeyHint="search"
-        // A search field, not a form: the phone shows "search" and no Go button
-        // that would reload the page.
-        type="search"
         aria-label="Buscar no vault"
         className={cn(
-          "w-full bg-transparent font-mono text-foreground outline-none",
+          "w-full min-w-0 bg-transparent font-mono text-foreground outline-none",
           "placeholder:text-muted-foreground",
           compact ? "text-base" : "text-xl",
         )}
       />
+
+      {/* Ours, not the browser's. `type="search"` draws a clear button on a Mac
+          and none on an iPhone, which left emptying the field to the backspace
+          key — and put a Safari address suggestion over the field for free. */}
+      {value.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            onChange("")
+            inputRef.current?.focus()
+          }}
+          aria-label="Limpar a busca"
+          className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground sm:size-8"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      )}
     </label>
   )
 }

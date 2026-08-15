@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, ChevronRight, FilePlus, FileText, FolderPlus, Image as ImageIcon, Pencil, Trash2, X } from "lucide-react"
+import { ChevronDown, ChevronLeft, ChevronRight, FilePlus, FileText, FolderPlus, Image as ImageIcon, MoreHorizontal, Pencil, Trash2, X } from "lucide-react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useState } from "react"
 
@@ -150,7 +150,10 @@ function Node({
           <span className="min-w-0 truncate">{entry.name}</span>
         </button>
 
-        <span className="flex shrink-0 items-center transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+        {/* One button on a phone, where four ate the file name and put delete
+            a stray tap from rename. The desktop keeps them inline on hover,
+            which is a pointer's affordance and works there. */}
+        <span className="hidden shrink-0 items-center transition-opacity focus-within:opacity-100 sm:flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
           {isFolder && (
             <>
               <IconButton
@@ -176,6 +179,15 @@ function Node({
             onClick={() => onDelete(entry)}
           />
         </span>
+
+        <RowMenu
+          entry={entry}
+          isFolder={isFolder}
+          onCreateNote={onCreateNote}
+          onCreateFolder={onCreateFolder}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
       </div>
 
       {isFolder && expanded && (
@@ -196,6 +208,108 @@ function Node({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The row's actions behind one button, on touch only. Deleting sits at the
+ * bottom and reads in words — an icon beside rename is how the wrong file goes.
+ */
+function RowMenu({
+  entry,
+  isFolder,
+  onCreateNote,
+  onCreateFolder,
+  onRename,
+  onDelete,
+}: {
+  entry: TreeEntry
+  isFolder: boolean
+  onCreateNote: (folder: string) => void
+  onCreateFolder: (parent: string) => void
+  onRename: (entry: TreeEntry) => void
+  onDelete: (entry: TreeEntry) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const close = () => setOpen(false)
+
+  return (
+    <span className="relative shrink-0 sm:hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={`Ações de ${entry.name}`}
+        aria-expanded={open}
+        className="flex size-11 items-center justify-center rounded-md text-muted-foreground"
+      >
+        <MoreHorizontal className="size-4" aria-hidden />
+      </button>
+
+      {open && (
+        <>
+          <span className="fixed inset-0 z-30" onClick={close} aria-hidden />
+          <span className="absolute right-0 top-full z-40 mt-1 flex w-44 flex-col gap-0.5 rounded-md border bg-card p-1 shadow-lg">
+            {isFolder && (
+              <>
+                <MenuItem
+                  label="Nova nota aqui"
+                  onClick={() => {
+                    close()
+                    onCreateNote(entry.path)
+                  }}
+                />
+                <MenuItem
+                  label="Nova pasta aqui"
+                  onClick={() => {
+                    close()
+                    onCreateFolder(entry.path)
+                  }}
+                />
+              </>
+            )}
+            <MenuItem
+              label="Renomear"
+              onClick={() => {
+                close()
+                onRename(entry)
+              }}
+            />
+            <span className="my-0.5 h-px bg-border" aria-hidden />
+            <MenuItem
+              label="Apagar"
+              destructive
+              onClick={() => {
+                close()
+                onDelete(entry)
+              }}
+            />
+          </span>
+        </>
+      )}
+    </span>
+  )
+}
+
+function MenuItem({
+  label,
+  destructive = false,
+  onClick,
+}: {
+  label: string
+  destructive?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded px-2 py-2.5 text-left text-sm hover:bg-muted",
+        destructive && "text-destructive",
+      )}
+    >
+      {label}
+    </button>
   )
 }
 
