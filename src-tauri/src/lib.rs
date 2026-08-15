@@ -1,4 +1,5 @@
 pub mod api;
+mod ask;
 mod commands;
 mod db;
 mod files;
@@ -7,7 +8,9 @@ pub mod import;
 mod index;
 mod ocr;
 mod parse;
+mod provider;
 mod search;
+mod secrets;
 mod serve;
 mod settings;
 mod tailscale;
@@ -63,6 +66,9 @@ pub fn run() {
             commands::server_state,
             commands::set_server,
             commands::test_connection,
+            commands::ask,
+            commands::ai_status,
+            commands::set_excluded,
             commands::write_note,
             commands::create_folder,
             commands::rename_entry,

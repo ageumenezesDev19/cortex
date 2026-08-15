@@ -363,6 +363,41 @@ pub fn remove_from_topic(state: &AppState, slug: &str, path: &str) -> Answer<Top
     Ok(topic)
 }
 
+/// Answers a question from the vault. Reachable from the phone too — the key
+/// stays here, and only the answer travels back.
+pub fn ask(state: &AppState, question: &str) -> Answer<crate::ask::Answer> {
+    let settings = crate::settings::load(&state.root);
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    crate::ask::run(
+        &state.root,
+        &conn,
+        question,
+        &settings.excluded,
+        (&settings.groq_model, &settings.gemini_model),
+    )
+}
+
+/// Whether a key is configured — never the key. The panel needs to know if the
+/// button will work, and nothing more than that.
+pub fn ai_status(state: &AppState) -> AiStatus {
+    let settings = crate::settings::load(&state.root);
+    AiStatus {
+        keys: crate::secrets::presence(&state.root),
+        excluded: settings.excluded,
+        groq_model: settings.groq_model,
+        gemini_model: settings.gemini_model,
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStatus {
+    pub keys: crate::secrets::Presence,
+    pub excluded: Vec<String>,
+    pub groq_model: String,
+    pub gemini_model: String,
+}
+
 /// What an import would do, so the confirmation can say it out loud.
 pub fn import_preview(state: &AppState) -> Answer<ImportPreview> {
     let notes = import::list().map_err(|e| e.to_string())?;

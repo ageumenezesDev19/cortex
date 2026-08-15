@@ -90,8 +90,12 @@ impl Control {
         Ok(Self { root, token, stop: Mutex::new(None), settings: Mutex::new(settings) })
     }
 
+    pub fn root(&self) -> PathBuf {
+        self.root.clone()
+    }
+
     pub fn settings(&self) -> Settings {
-        *self.settings.lock().expect("settings")
+        self.settings.lock().expect("settings").clone()
     }
 
     pub fn state(&self) -> ServerState {
@@ -158,7 +162,7 @@ impl Control {
             }
         }
 
-        *self.settings.lock().expect("settings") = wanted;
+        *self.settings.lock().expect("settings") = wanted.clone();
         settings::save(&self.root, &wanted)
     }
 
@@ -329,6 +333,11 @@ fn dispatch(state: &AppState, command: &str, args: Value) -> Result<Value, Strin
         )?),
         "get_note" => ok(api::get_note(state, arg(&args, "path")?)?),
         "vault_status" => ok(api::vault_status(state)?),
+        // The phone may ask; the key never leaves this machine, only the answer
+        // travels back. Setting exclusions stays desktop-only, like the server
+        // switches — deciding what may leave is the machine's business.
+        "ask" => ok(api::ask(state, &arg::<String>(&args, "question")?)?),
+        "ai_status" => ok(api::ai_status(state)),
         "list_tree" => ok(api::list_tree(state)?),
         "get_asset" => ok(api::get_asset(state, arg(&args, "path")?)?),
         "suggest_placement" => ok(api::suggest_placement(state, &arg::<String>(&args, "title")?)?),

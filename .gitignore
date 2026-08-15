@@ -15,6 +15,12 @@ dist-ssr
 # Compiled from ocr/main.swift by scripts/build-ocr.sh
 src-tauri/binaries
 
+# API keys for the answer feature. Listed before any key exists, so the first
+# `git add -A` after one is written cannot pick it up.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

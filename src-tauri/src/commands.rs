@@ -152,6 +152,26 @@ pub fn import_preview(state: State<AppState>) -> Result<ImportPreview, String> {
     api::import_preview(&state)
 }
 
+#[tauri::command]
+pub fn ask(state: State<AppState>, question: String) -> Result<crate::ask::Answer, String> {
+    api::ask(&state, &question)
+}
+
+#[tauri::command]
+pub fn ai_status(state: State<AppState>) -> api::AiStatus {
+    api::ai_status(&state)
+}
+
+/// The excluded list is the only part of the answer settings the app writes;
+/// the keys are the person's, in their own file.
+#[tauri::command]
+pub fn set_excluded(state: State<AppState>, excluded: Vec<String>) -> Result<api::AiStatus, String> {
+    let mut current = settings::load(&state.root);
+    current.excluded = excluded;
+    settings::save(&state.root, &current)?;
+    Ok(api::ai_status(&state))
+}
+
 // Serving the vault to the phone is the machine's business, so these are
 // desktop-only: the phone is looking at a server, not running one.
 
@@ -169,7 +189,12 @@ pub fn set_server(
     local_network: bool,
     tailscale: bool,
 ) -> Result<serve::ServerState, String> {
-    control.apply(settings::Settings { serving, local_network, tailscale })?;
+    // Read from disk, not from the server's cached copy: the answer settings
+    // have their own writer, and merging onto a stale cache would silently drop
+    // an exclusion the moment a server switch was flipped.
+    let stored = settings::load(&control.root());
+    let wanted = settings::Settings { serving, local_network, tailscale, ..stored };
+    control.apply(wanted)?;
     Ok(control.state())
 }
 

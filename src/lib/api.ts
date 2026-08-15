@@ -277,6 +277,40 @@ export type TestStep = {
   detail: string
 }
 
+/** One passage the answer may cite, numbered from 1. */
+export type Source = {
+  index: number
+  path: string
+  title: string
+  headingPath: string
+  /** Byte offset, so a citation jumps the same way a search result does. */
+  startOffset: number
+}
+
+export type AiAnswer = {
+  text: string
+  sources: Source[]
+  provider: "groq" | "gemini"
+  /** What the question was expanded into, so retrieval is not a black box. */
+  terms: string[]
+}
+
+/** Whether a key is configured — never the key itself. */
+export type AiStatus = {
+  keys: { groq: boolean; gemini: boolean }
+  excluded: string[]
+  groqModel: string
+  geminiModel: string
+}
+
+export const ask = (question: string) => call<AiAnswer>("ask", { question })
+
+export const aiStatus = () => call<AiStatus>("ai_status")
+
+/** Desktop only: what may leave this machine is the machine's decision. */
+export const setExcluded = (excluded: string[]) =>
+  invoke<AiStatus>("set_excluded", { excluded })
+
 export const serverState = () => invoke<ServerState>("server_state")
 
 export const setServer = (serving: boolean, localNetwork: boolean, tailscale: boolean) =>

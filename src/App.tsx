@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview"
-import { ArrowLeft, FilePlus, FolderPlus } from "lucide-react"
+import { ArrowLeft, FilePlus, FolderPlus, Sparkles } from "lucide-react"
 import { motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
@@ -11,6 +11,7 @@ import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
 import { PromptDialog } from "./components/prompt-dialog"
 import { Rail } from "./components/rail"
+import { AnswerPanel } from "./components/answer-panel"
 import { SharePanel } from "./components/share-panel"
 import { ResultGroup } from "./components/result-group"
 import { SearchField } from "./components/search-field"
@@ -19,6 +20,8 @@ import { TopicsPanel } from "./components/topics-panel"
 import { TreePanel } from "./components/tree-panel"
 import {
   addToTopic,
+  aiStatus,
+  ask as askVault,
   createFolder,
   createNote,
   createTopic,
@@ -36,8 +39,11 @@ import {
   renameEntry,
   search,
   vaultStatus,
+  type AiAnswer,
+  type AiStatus,
   type Group,
   type Hit,
+  type Source as Citation,
   type ImportPreview,
   type ImportStatus,
   type IndexStatus,
@@ -96,6 +102,10 @@ export default function App() {
   const [importing, setImporting] = useState(false)
   const [sharing, setSharing] = useState(false)
   const photo = useRef<HTMLInputElement>(null)
+  const [answer, setAnswer] = useState<AiAnswer | null>(null)
+  const [answering, setAnswering] = useState(false)
+  const [answerError, setAnswerError] = useState<string | null>(null)
+  const [ai, setAi] = useState<AiStatus | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
@@ -126,6 +136,9 @@ export default function App() {
       .catch(() => {})
     refreshTopics()
     refreshTree()
+    aiStatus()
+      .then(setAi)
+      .catch(() => {})
 
     const stopStatus = onIndexStatus(setStatus)
     const stopImport = onImportStatus(setImportStatus)
@@ -206,6 +219,25 @@ export default function App() {
     },
     [hits],
   )
+
+  /**
+   * A question is a search that ends in `?`. The literal results stay on
+   * screen — the answer is an extra, never the only road.
+   */
+  const runAsk = useCallback((question: string) => {
+    setAnswering(true)
+    setAnswer(null)
+    setAnswerError(null)
+    askVault(question)
+      .then(setAnswer)
+      .catch((reason) => setAnswerError(String(reason).replace(/^Error:\s*/, "")))
+      .finally(() => setAnswering(false))
+  }, [])
+
+  /** A citation lands on the passage through the same anchor a hit uses. */
+  const openSource = useCallback((source: Citation) => {
+    setOpen({ kind: "note", path: source.path, anchorStart: source.startOffset, from: "search" })
+  }, [])
 
   const openHit = useCallback((hit: Hit) => {
     setOpen(
@@ -394,6 +426,30 @@ export default function App() {
                   open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
+                {/* A question is a search that ends in `?`. The button sits
+                    above the literal results, which never leave the screen. */}
+                {isQuestion(query) && (
+                  <AskBanner
+                    ready={Boolean(ai?.keys.groq || ai?.keys.gemini)}
+                    busy={answering}
+                    onAsk={() => runAsk(query.trim())}
+                  />
+                )}
+
+                {(answer || answering || answerError) && (
+                  <AnswerPanel
+                    question={query.trim()}
+                    answer={answer}
+                    error={answerError}
+                    loading={answering}
+                    onOpenSource={openSource}
+                    onClose={() => {
+                      setAnswer(null)
+                      setAnswerError(null)
+                    }}
+                  />
+                )}
+
                 {groups.map((group, position) => (
                   <motion.div
                     key={group.key}
@@ -646,6 +702,40 @@ function confirmLabel(confirm: Confirm) {
 
 /** A vault with nothing in it should say what to do, not shrug — and the way to
  *  start writing belongs here, not inside a panel you have to know about. */
+/** A search that ends in a question mark is a question. */
+const isQuestion = (query: string) => query.trim().endsWith("?") && query.trim().length > 2
+
+function AskBanner({
+  ready,
+  busy,
+  onAsk,
+}: {
+  ready: boolean
+  busy: boolean
+  onAsk: () => void
+}) {
+  if (!ready) {
+    return (
+      <p className="rounded-lg border border-dashed px-4 py-3 text-xs text-muted-foreground">
+        Para responder daqui, ponha uma chave do Groq ou do Gemini no seu arquivo de ambiente. Sem
+        ela a busca acima segue funcionando.
+      </p>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onAsk}
+      disabled={busy}
+      className="flex w-full items-center justify-center gap-2 rounded-lg border border-found/40 bg-found/10 px-4 py-3 text-sm text-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+    >
+      <Sparkles className="size-4 text-found" aria-hidden />
+      responder a partir das minhas notas
+    </button>
+  )
+}
+
 const emptyVault = (desktop: boolean) =>
   desktop
     ? "Vault vazio. Comece uma nota, ou arraste um print para esta janela."

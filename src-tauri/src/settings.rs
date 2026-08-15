@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 const DIR: &str = ".server";
 const FILE: &str = "settings.json";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// The server itself. Off means the port is closed, here included.
@@ -20,13 +20,38 @@ pub struct Settings {
     pub local_network: bool,
     /// Keep a `tailscale serve` mapping pointing at the app.
     pub tailscale: bool,
+    /// Path prefixes a question may never carry to a provider. Empty by
+    /// default — the person decides what is private, not the app.
+    #[serde(default)]
+    pub excluded: Vec<String>,
+    /// Free-tier model names change without notice; a rename must not need a
+    /// rebuild, so they live here rather than in the code.
+    #[serde(default = "default_groq_model")]
+    pub groq_model: String,
+    #[serde(default = "default_gemini_model")]
+    pub gemini_model: String,
+}
+
+fn default_groq_model() -> String {
+    crate::provider::DEFAULT_GROQ_MODEL.to_string()
+}
+
+fn default_gemini_model() -> String {
+    crate::provider::DEFAULT_GEMINI_MODEL.to_string()
 }
 
 /// Nothing is exposed until it is asked for once: the first run serves only to
 /// this machine, and the switches are remembered from then on.
 impl Default for Settings {
     fn default() -> Self {
-        Self { serving: true, local_network: false, tailscale: false }
+        Self {
+            serving: true,
+            local_network: false,
+            tailscale: false,
+            excluded: Vec::new(),
+            groq_model: default_groq_model(),
+            gemini_model: default_gemini_model(),
+        }
     }
 }
 
@@ -67,7 +92,7 @@ mod tests {
     #[test]
     fn what_was_switched_on_survives_a_restart() {
         let dir = TempDir::new().unwrap();
-        let wanted = Settings { serving: true, local_network: true, tailscale: true };
+        let wanted = Settings { local_network: true, tailscale: true, ..Settings::default() };
         save(dir.path(), &wanted).unwrap();
 
         let read = load(dir.path());
