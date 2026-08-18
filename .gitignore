@@ -18,6 +18,10 @@ dist-ssr
 dist-demo
 .vercel
 
+# The knowledge graph an agent builds of this repo. Derived, and about the code
+# rather than part of it.
+graphify-out
+
 # Compiled from ocr/main.swift by scripts/build-ocr.sh
 src-tauri/binaries
 
