@@ -32,8 +32,39 @@ async function post<T>(command: string, args: Record<string, unknown> = {}): Pro
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
 }
 
-const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
-  insideApp() ? invoke<T>(command, args) : post<T>(command, args)
+/**
+ * The web demo: no Tauri, no server, everything in the page.
+ *
+ * A build-time flag rather than a runtime check, so the demo's data and the
+ * embedding model are absent from the app's own bundle — a desktop build must
+ * not carry a vault of invented notes.
+ */
+export const isDemo = import.meta.env.VITE_DEMO === "1"
+
+const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+  if (isDemo) return demoCall<T>(command, args)
+  return insideApp() ? invoke<T>(command, args) : post<T>(command, args)
+}
+
+/** Loaded on demand: naming it at the top would pull the demo into every
+ *  bundle, flag or no flag. */
+const demoCall = async <T>(command: string, args: Record<string, unknown>): Promise<T> => {
+  const { call: answer } = await import("../demo/shim")
+  return answer<T>(command, args, demoLanguage)
+}
+
+/**
+ * The language the demo is showing, read by the shim to pick a vault.
+ *
+ * A module variable rather than a hook argument because `call` is reached from
+ * plain functions all over `api.ts`, and threading React state through every
+ * one of them would put the provider inside the transport.
+ */
+let demoLanguage: "en" | "pt" = "en"
+
+export const setDemoLanguage = (language: "en" | "pt") => {
+  demoLanguage = language
+}
 
 /** `[x, y, width, height]`, normalised 0–1 with the origin at the top left. */
 export type Bbox = [number, number, number, number]
@@ -97,7 +128,7 @@ export type VaultStatus = {
 }
 
 export type IndexStatus = {
-  phase: "scanning" | "ocr" | "idle"
+  phase: "scanning" | "ocr" | "embedding" | "idle"
   counts: { notes: number; images: number; chunks: number }
   current: string | null
   pending: number
@@ -115,8 +146,17 @@ export type Topic = {
 
 export const INDEX_STATUS_EVENT = "index:status"
 
+/** What a search found, and whether it had to widen to find it. */
+export type Found = {
+  groups: Group[]
+  /** Nothing matched every word, so any of them was accepted. Said out loud. */
+  widened: boolean
+  /** The words actually searched, once the filler was dropped. */
+  terms: string[]
+}
+
 export const search = (query: string, topic: string | null = null, limit = 40) =>
-  call<Group[]>("search", { query, topic, limit })
+  call<Found>("search", { query, topic, limit })
 
 export const getNote = (path: string) => call<NoteContent>("get_note", { path })
 
@@ -224,7 +264,26 @@ export const removeFromTopic = (slug: string, path: string) =>
  * comes down the same session as everything else.
  */
 export const assetUrl = (root: string, relativePath: string) =>
-  insideApp() ? convertFileSrc(`${root}/${relativePath}`) : `/asset/${encode(relativePath)}`
+  isDemo
+    ? demoAssetUrl(relativePath)
+    : insideApp()
+      ? convertFileSrc(`${root}/${relativePath}`)
+      : `/asset/${encode(relativePath)}`
+
+/**
+ * A screenshot pasted into the demo lives in IndexedDB, so it needs a blob URL.
+ *
+ * The map is filled when the vault loads and when an image is written, never
+ * here: `<img src>` is read during render and cannot wait for a promise, so
+ * resolving lazily would hand back an empty string and never re-render.
+ */
+const blobUrls = new Map<string, string>()
+
+export const rememberAsset = (path: string, blob: Blob) => {
+  if (!blobUrls.has(path)) blobUrls.set(path, URL.createObjectURL(blob))
+}
+
+const demoAssetUrl = (path: string) => blobUrls.get(path) ?? ""
 
 const encode = (path: string) => path.split("/").map(encodeURIComponent).join("/")
 
@@ -237,6 +296,10 @@ const encode = (path: string) => path.split("/").map(encodeURIComponent).join("/
  */
 export async function uploadImage(file: File, note = ""): Promise<string> {
   const ext = (file.name.split(".").pop() || file.type.split("/")[1] || "png").toLowerCase()
+  if (isDemo) {
+    const bytes = [...new Uint8Array(await file.arrayBuffer())]
+    return call<string>("upload_image", { bytes, extension: ext, notePath: note })
+  }
   const response = await fetch(
     `/upload?note=${encodeURIComponent(note)}&ext=${encodeURIComponent(ext)}`,
     { method: "POST", credentials: "same-origin", body: file },
@@ -289,29 +352,155 @@ export type Source = {
   startOffset: number
 }
 
+/** Where a note the subject lives in sits, and how much of it matched. */
+export type Place = {
+  path: string
+  folder: string
+  title: string
+  passages: number
+}
+
 export type AiAnswer = {
   text: string
   sources: Source[]
   provider: "groq" | "gemini"
   /** What the question was expanded into, so retrieval is not a black box. */
   terms: string[]
+  /** Asking where something is and what it says are different questions. */
+  kind: "locate" | "explain"
+  places: Place[]
 }
 
-/** Whether a key is configured — never the key itself. */
+export type Provider = "groq" | "gemini"
+
+/**
+ * Where the key in use came from. The app reads the environment first, so a key
+ * typed here sits behind an exported variable — the panel says which one is
+ * answering rather than leaving that a mystery.
+ */
+export type KeySource = "environment" | "app"
+
+/** What a provider said about its own limits, when it says anything at all. */
+export type Limits = {
+  limitRequests: number | null
+  remainingRequests: number | null
+  resetRequests: string | null
+  limitTokens: number | null
+  remainingTokens: number | null
+  resetTokens: string | null
+}
+
+/**
+ * Groq reports its own numbers in every reply; Gemini reports none, so its half
+ * is this app counting its own calls against a limit written down.
+ */
+export type Quota = {
+  groq: Limits
+  groqCalls: number
+  geminiCalls: number
+  geminiDailyLimit: number
+  /** Seconds to midnight Pacific, when Gemini's day turns. */
+  geminiResetsIn: number
+}
+
+/** Whether a key is configured and where it came from — never the key itself. */
 export type AiStatus = {
-  keys: { groq: boolean; gemini: boolean }
+  keys: { groq: KeySource | null; gemini: KeySource | null }
   excluded: string[]
+  quota: Quota
+  /** How much of the vault can be searched by meaning, and whether the app
+   *  keeps that current on its own. */
+  coverage: { chunks: number; embedded: number }
+  autoEmbed: boolean
+  /** Whether the weights are on this machine. Nothing about meaning works
+   *  without them, and only the panel's button may put them there. */
+  modelInstalled: boolean
   groqModel: string
   geminiModel: string
+  geminiExpandModel: string
 }
 
-export const ask = (question: string) => call<AiAnswer>("ask", { question })
+export const KEY_NAMES: Record<Provider, string> = {
+  groq: "GROQ_API_KEY",
+  gemini: "GEMINI_API_KEY",
+}
+
+/**
+ * The token is this call's handle: `cancelAsk` kills the request with it rather
+ * than merely stopping the wait. A question is two provider calls under the
+ * same token, so cancelling catches whichever is in the air.
+ */
+export const ask = (question: string, token: number) =>
+  call<AiAnswer>("ask", { question, token })
+
+export const cancelAsk = (token: number) => call<void>("cancel_ask", { token })
 
 export const aiStatus = () => call<AiStatus>("ai_status")
 
-/** Desktop only: what may leave this machine is the machine's decision. */
+// Desktop only, and deliberately not on the server: what may leave this machine
+// — and with what key — is decided at the machine, not over plain HTTP.
+
 export const setExcluded = (excluded: string[]) =>
   invoke<AiStatus>("set_excluded", { excluded })
+
+/** `null` removes the key. Nothing here ever reads one back. */
+export const setKey = (name: string, value: string | null) =>
+  invoke<AiStatus>("set_key", { name, value })
+
+export const testKey = (provider: Provider) => invoke<void>("test_key", { provider })
+
+/** Spends one Groq request to hear its numbers. Never offered for Gemini. */
+export const refreshQuota = () => invoke<AiStatus>("refresh_quota")
+
+export const EMBED_EVENT = "embed:status"
+
+export type EmbedStatus = {
+  phase: "running" | "done" | "failed"
+  done: number
+  total: number
+  error: string | null
+}
+
+/** Desktop only, and never automatic — the model runs here, but the pass still
+ *  costs minutes of someone's laptop. */
+export const embedVault = () => invoke<void>("embed_vault")
+
+export const cancelEmbedding = () => invoke<void>("cancel_embedding")
+
+export const setAutoEmbed = (on: boolean) => invoke<AiStatus>("set_auto_embed", { on })
+
+export function onEmbedStatus(handler: (status: EmbedStatus) => void): () => void {
+  if (!insideApp()) return () => {}
+  const stop = listen<EmbedStatus>(EMBED_EVENT, (event) => handler(event.payload))
+  return () => void stop.then((off) => off())
+}
+
+export const MODEL_EVENT = "model:status"
+
+export type ModelStatus = {
+  phase: "downloading" | "ready" | "failed"
+  /** Bytes, not passages: this is the download, not the embedding. */
+  done: number
+  total: number
+  error: string | null
+}
+
+/** The one moment this app reaches the network for search to work. Only the
+ *  button in the panel may call it. */
+export const downloadModel = () => invoke<void>("download_model")
+
+/** Deletes the weights. The vectors already made stay — what is embedded stays
+ *  searchable, and only new passages wait for the model to come back. */
+export const deleteModel = () => invoke<AiStatus>("delete_model")
+
+export function onModelStatus(handler: (status: ModelStatus) => void): () => void {
+  if (!insideApp()) return () => {}
+  const stop = listen<ModelStatus>(MODEL_EVENT, (event) => handler(event.payload))
+  return () => void stop.then((off) => off())
+}
+
+export const setGeminiLimit = (limit: number) =>
+  invoke<AiStatus>("set_gemini_limit", { limit })
 
 export type ClassifyStatus = {
   phase: "running" | "done" | "failed"

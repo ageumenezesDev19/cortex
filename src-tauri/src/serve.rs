@@ -336,7 +336,13 @@ fn dispatch(state: &AppState, command: &str, args: Value) -> Result<Value, Strin
         // The phone may ask; the key never leaves this machine, only the answer
         // travels back. Setting exclusions stays desktop-only, like the server
         // switches — deciding what may leave is the machine's business.
-        "ask" => ok(api::ask(state, &arg::<String>(&args, "question")?)?),
+        "ask" => ok(api::ask(state, &arg::<String>(&args, "question")?, arg(&args, "token")?)?),
+        // Reachable from the phone on purpose: waiting on a slow answer is
+        // worse there, and all it can kill is a curl its own request started.
+        "cancel_ask" => {
+            crate::provider::cancel(arg::<u64>(&args, "token")?);
+            ok(())
+        }
         "ai_status" => ok(api::ai_status(state)),
         "list_tree" => ok(api::list_tree(state)?),
         "get_asset" => ok(api::get_asset(state, arg(&args, "path")?)?),
@@ -576,6 +582,17 @@ mod tests {
     fn the_notes_import_is_not_reachable_from_the_phone() {
         let dir = TempDir::new().unwrap();
         assert!(dispatch(&state(&dir), "import_notes", json!({})).is_err());
+    }
+
+    /// Deciding what may leave the machine, and with what key, stays on the
+    /// machine: on the local network this session travels as plain HTTP.
+    #[test]
+    fn the_ai_settings_are_not_reachable_from_the_phone() {
+        let dir = TempDir::new().unwrap();
+        let state = state(&dir);
+        for command in ["set_key", "test_key", "set_excluded"] {
+            assert!(dispatch(&state, command, json!({})).is_err(), "{command}");
+        }
     }
 
     #[test]

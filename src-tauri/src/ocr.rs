@@ -26,7 +26,7 @@ pub struct OcrResult {
     /// particular — the difference is what stops a bare screenshot from being
     /// sent to the model on every reindex.
     #[serde(default)]
-    pub marks: Option<crate::classify::Marks>,
+    pub marks: Option<crate::marks::Marks>,
 }
 
 /// `print-01.png` → `print-01.ocr.json`, sitting next to the image so the vault

@@ -8,8 +8,10 @@ import {
   Moon,
   Plus,
   ImagePlus,
+  Languages,
   Search,
   Share2,
+  ShieldCheck,
   Sun,
   Tags,
 } from "lucide-react"
@@ -17,12 +19,48 @@ import { useState } from "react"
 
 import { isDesktop } from "../lib/api"
 import { cn } from "../lib/utils"
+import { useLanguage, usePick } from "./language-provider"
 import { useTheme, type Theme } from "./theme-provider"
 
-const THEMES: { value: Theme; icon: typeof Sun; label: string }[] = [
-  { value: "light", icon: Sun, label: "Tema claro" },
-  { value: "dark", icon: Moon, label: "Tema escuro" },
-  { value: "system", icon: Monitor, label: "Seguir o sistema" },
+const content = {
+  en: {
+    themes: { light: "Light theme", dark: "Dark theme", system: "Follow the system" },
+    search: "Search",
+    topics: "Topics",
+    vault: "Vault",
+    privacy: "AI and privacy",
+    phone: "Open on the phone",
+    createTitle: "Create — Cmd+N for a note",
+    create: "Create",
+    newNote: "New note",
+    newFolder: "New folder",
+    sendPhoto: "Send a photo",
+    importNotes: "Import from Notes",
+    classify: "Sort screenshots",
+    language: "Português",
+  },
+  pt: {
+    themes: { light: "Tema claro", dark: "Tema escuro", system: "Seguir o sistema" },
+    search: "Buscar",
+    topics: "Tópicos",
+    vault: "Vault",
+    privacy: "IA e privacidade",
+    phone: "Abrir no celular",
+    createTitle: "Criar — Cmd+N para nota",
+    create: "Criar",
+    newNote: "Nova nota",
+    newFolder: "Nova pasta",
+    sendPhoto: "Mandar foto",
+    importNotes: "Importar do Notes",
+    classify: "Classificar prints",
+    language: "English",
+  },
+}
+
+const THEME_ORDER: { value: Theme; icon: typeof Sun }[] = [
+  { value: "light", icon: Sun },
+  { value: "dark", icon: Moon },
+  { value: "system", icon: Monitor },
 ]
 
 export type Panel = "none" | "topics" | "tree"
@@ -34,6 +72,7 @@ export function Rail({
   onNewFolder,
   onImport,
   onShare,
+  onSettings,
   onSendPhoto,
   onClassify,
 }: {
@@ -43,9 +82,11 @@ export function Rail({
   onNewFolder: () => void
   onImport: () => void
   onShare: () => void
+  onSettings: () => void
   onSendPhoto: () => void
   onClassify: () => void
 }) {
+  const t = usePick()(content)
   return (
     // A column on the side of a window, a bar under a thumb on a phone. The
     // padding at the end is the home indicator on an iPhone.
@@ -72,29 +113,55 @@ export function Rail({
 
       <RailButton
         icon={Search}
-        label="Buscar"
+        label={t.search}
         active={panel === "none"}
         onClick={() => onTogglePanel("none")}
       />
       <RailButton
         icon={Layers}
-        label="Tópicos"
+        label={t.topics}
         active={panel === "topics"}
         onClick={() => onTogglePanel("topics")}
       />
       <RailButton
         icon={FolderTree}
-        label="Vault"
+        label={t.vault}
         active={panel === "tree"}
         onClick={() => onTogglePanel("tree")}
       />
 
       <div className="ml-auto flex items-center gap-1 sm:ml-0 sm:mt-auto sm:flex-col">
-        {/* Only the machine serving the vault has an address to hand out. */}
-        {isDesktop && <RailButton icon={Share2} label="Abrir no celular" onClick={onShare} />}
+        {/* Only the machine serving the vault has an address to hand out — and
+            only it decides what the AI may read, with which key. */}
+        {isDesktop && (
+          <>
+            <RailButton icon={ShieldCheck} label={t.privacy} onClick={onSettings} />
+            <RailButton icon={Share2} label={t.phone} onClick={onShare} />
+          </>
+        )}
+        <LanguageButton />
         <ThemeButtons />
       </div>
     </nav>
+  )
+}
+
+/**
+ * Only the demo shows this. The installed app has one reader, and translating
+ * the window he already reads would be work with no audience — see
+ * `language-provider`.
+ */
+function LanguageButton() {
+  const t = usePick()(content)
+  const { language, setLanguage, switchable } = useLanguage()
+  if (!switchable) return null
+
+  return (
+    <RailButton
+      icon={Languages}
+      label={t.language}
+      onClick={() => setLanguage(language === "en" ? "pt" : "en")}
+    />
   )
 }
 
@@ -103,26 +170,27 @@ export function Rail({
  * phone has no space for a setting you touch once a month.
  */
 function ThemeButtons() {
+  const t = usePick()(content)
   const { theme, setTheme } = useTheme()
-  const current = THEMES.find((one) => one.value === theme) ?? THEMES[2]
+  const current = THEME_ORDER.find((one) => one.value === theme) ?? THEME_ORDER[2]
 
   return (
     <>
       <RailButton
         className="sm:hidden"
         icon={current.icon}
-        label={current.label}
+        label={t.themes[current.value]}
         onClick={() => {
-          const at = THEMES.findIndex((one) => one.value === theme)
-          setTheme(THEMES[(at + 1) % THEMES.length].value)
+          const at = THEME_ORDER.findIndex((one) => one.value === theme)
+          setTheme(THEME_ORDER[(at + 1) % THEME_ORDER.length].value)
         }}
       />
-      {THEMES.map(({ value, icon, label }) => (
+      {THEME_ORDER.map(({ value, icon }) => (
         <RailButton
           key={value}
           className="hidden sm:flex"
           icon={icon}
-          label={label}
+          label={t.themes[value]}
           active={theme === value}
           onClick={() => setTheme(value)}
         />
@@ -144,14 +212,15 @@ function NewMenu({
   onSendPhoto: () => void
   onClassify: () => void
 }) {
+  const t = usePick()(content)
   const [open, setOpen] = useState(false)
 
   return (
     <span className="relative">
       <button
         type="button"
-        title="Criar — Cmd+N para nota"
-        aria-label="Criar"
+        title={t.createTitle}
+        aria-label={t.create}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={cn(
@@ -169,7 +238,7 @@ function NewMenu({
           <span className="absolute bottom-full left-0 z-20 mb-2 flex w-44 flex-col gap-0.5 rounded-md border bg-card p-1 shadow-lg sm:bottom-auto sm:left-full sm:top-0 sm:mb-0 sm:ml-2 sm:w-40">
             <MenuItem
               icon={FilePlus}
-              label="Nova nota"
+              label={t.newNote}
               onClick={() => {
                 setOpen(false)
                 onNewNote()
@@ -177,7 +246,7 @@ function NewMenu({
             />
             <MenuItem
               icon={FolderPlus}
-              label="Nova pasta"
+              label={t.newFolder}
               onClick={() => {
                 setOpen(false)
                 onNewFolder()
@@ -188,7 +257,7 @@ function NewMenu({
             {!isDesktop && (
               <MenuItem
                 icon={ImagePlus}
-                label="Mandar foto"
+                label={t.sendPhoto}
                 onClick={() => {
                   setOpen(false)
                   onSendPhoto()
@@ -200,7 +269,7 @@ function NewMenu({
                 <span className="my-0.5 h-px bg-border" aria-hidden />
                 <MenuItem
                   icon={Download}
-                  label="Importar do Notes"
+                  label={t.importNotes}
                   onClick={() => {
                     setOpen(false)
                     onImport()
@@ -210,7 +279,7 @@ function NewMenu({
                     entraram antes, e só quando você mandar. */}
                 <MenuItem
                   icon={Tags}
-                  label="Classificar prints"
+                  label={t.classify}
                   onClick={() => {
                     setOpen(false)
                     onClassify()

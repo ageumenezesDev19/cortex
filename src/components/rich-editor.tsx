@@ -101,7 +101,7 @@ export function RichEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return <div ref={host} className="h-full overflow-y-auto" />
+  return <div ref={host} className="scroll-y h-full" />
 }
 
 function clearAnchor(view: EditorView) {

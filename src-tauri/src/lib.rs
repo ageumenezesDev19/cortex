@@ -3,12 +3,14 @@ mod ask;
 pub mod classify;
 mod commands;
 mod db;
+pub mod embed;
 mod files;
 pub mod html;
 pub mod import;
 pub mod index;
+pub mod marks;
 mod ocr;
-mod parse;
+pub mod parse;
 mod provider;
 mod search;
 mod secrets;
@@ -16,6 +18,7 @@ mod serve;
 mod settings;
 mod tailscale;
 mod topics;
+mod usage;
 pub mod vault;
 mod watch;
 
@@ -68,8 +71,18 @@ pub fn run() {
             commands::set_server,
             commands::test_connection,
             commands::ask,
+            commands::cancel_ask,
             commands::ai_status,
             commands::set_excluded,
+            commands::set_key,
+            commands::test_key,
+            commands::refresh_quota,
+            commands::download_model,
+            commands::delete_model,
+            commands::embed_vault,
+            commands::cancel_embedding,
+            commands::set_auto_embed,
+            commands::set_gemini_limit,
             commands::classify_preview,
             commands::classify_existing,
             commands::write_note,

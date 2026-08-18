@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    The box Vision draws around recognised text, made into a mark: three lines of
+    text with the middle one framed. Something only this app could own, because
+    only this app has the boxes.
+
+    Corner brackets rather than a closed rule — a full rectangle around a bar
+    reads as a button, and the open corners are what say "scan". The squircle and
+    its margin are drawn here because `tauri icon` only resizes, never masks.
+  -->
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111c31"/>
+      <stop offset="1" stop-color="#0b1120"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="96" y="96" width="832" height="832" rx="186" fill="url(#ground)"/>
+  <rect x="96" y="96" width="832" height="832" rx="186" fill="none" stroke="#1e2a42" stroke-width="4"/>
+
+  <!-- Lines that are simply there, and the one that was found. -->
+  <g fill="#55668a">
+    <rect x="312" y="300" width="380" height="42" rx="21"/>
+    <rect x="312" y="682" width="280" height="42" rx="21"/>
+  </g>
+  <rect x="312" y="489" width="400" height="46" rx="23" fill="#e8eef8"/>
+
+  <!-- The gap between the brackets stays wider than the line it holds, so the
+       two never read as one shape. -->
+  <g fill="none" stroke="#f59e0b" stroke-width="30" stroke-linecap="round">
+    <path d="M236 464V402a22 22 0 0 1 22-22h110"/>
+    <path d="M788 464V402a22 22 0 0 0-22-22H656"/>
+    <path d="M236 560v62a22 22 0 0 0 22 22h110"/>
+    <path d="M788 560v62a22 22 0 0 1-22 22H656"/>
+  </g>
+</svg>

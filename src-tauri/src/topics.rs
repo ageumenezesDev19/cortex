@@ -57,6 +57,17 @@ pub fn load_all(root: &Path) -> Result<Vec<Topic>> {
         .filter_map(|entry| read(&entry.path()).ok())
         .collect();
 
+    // An automatic topic left with nothing in it is a leftover: the screenshot
+    // that created it was deleted or classified again. One you made is yours
+    // even while it is empty, and stays.
+    topics.retain(|topic| {
+        if topic.auto && topic.members.is_empty() {
+            let _ = delete(root, &topic.slug);
+            return false;
+        }
+        true
+    });
+
     topics.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(topics)
 }
@@ -224,6 +235,30 @@ mod tests {
         )
         .unwrap();
         dir
+    }
+
+    /// An empty automatic topic is a leftover; an empty one of yours is a
+    /// decision waiting to be used.
+    #[test]
+    fn an_empty_automatic_topic_is_swept_and_yours_is_not() {
+        let dir = vault_with_topic(&[]);
+        save(
+            dir.path(),
+            &Topic {
+                slug: "javascript".into(),
+                name: "JavaScript".into(),
+                icon: None,
+                color: None,
+                auto: true,
+                members: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let listed = load_all(dir.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].slug, "react", "o seu fica mesmo vazio");
+        assert!(!path_of(dir.path(), "javascript").exists(), "o automático some do disco");
     }
 
     #[test]

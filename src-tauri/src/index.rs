@@ -28,6 +28,12 @@ impl Indexer {
         &self.root
     }
 
+    /// Lent out so the embedding can run on this thread with the connection
+    /// that already serialises with the writes.
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Reloads the topic manifests into their database mirror. Whole-file
     /// replacement, so an edit made in the editor cannot leave the index behind.
     pub fn sync_topics(&mut self) -> Result<()> {
@@ -85,9 +91,12 @@ impl Indexer {
             [note_id],
         )?;
         {
+            // The title and the path ride on the chunk so the search can weigh
+            // them: the name of a note is often the only place a word appears.
             let mut insert = tx.prepare(
-                "INSERT INTO chunks (note_id, kind, heading_path, start_offset, end_offset, text)
-                 VALUES (?1, 'text', ?2, ?3, ?4, ?5)",
+                "INSERT INTO chunks
+                   (note_id, kind, heading_path, start_offset, end_offset, text, title, path)
+                 VALUES (?1, 'text', ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for chunk in parse::chunk_markdown(&source) {
                 insert.execute(params![
@@ -95,7 +104,9 @@ impl Indexer {
                     chunk.heading_path,
                     chunk.start as i64,
                     chunk.end as i64,
-                    chunk.text
+                    chunk.text,
+                    title,
+                    rel
                 ])?;
             }
         }
@@ -175,9 +186,9 @@ pub fn index_asset_into(
         tx.execute("DELETE FROM chunks WHERE asset_id = ?1", [asset_id])?;
         if !ocr.text.trim().is_empty() {
             tx.execute(
-                "INSERT INTO chunks (asset_id, note_id, kind, heading_path, text)
-                 VALUES (?1, ?2, 'image', ?3, ?4)",
-                params![asset_id, note_id, heading, text],
+                "INSERT INTO chunks (asset_id, note_id, kind, heading_path, text, title, path)
+                 VALUES (?1, ?2, 'image', ?3, ?4, ?5, ?6)",
+                params![asset_id, note_id, heading, text, label, rel],
             )?;
         }
         tx.commit()?;

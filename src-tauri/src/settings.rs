@@ -30,6 +30,65 @@ pub struct Settings {
     pub groq_model: String,
     #[serde(default = "default_gemini_model")]
     pub gemini_model: String,
+    /// Turning a question into search terms is keyword work, and the flash-lite
+    /// tier carries 500 requests a day against the 20 of the model that writes
+    /// the answer. Spending the scarce one on that would be spending it wrong.
+    #[serde(default = "default_gemini_expand_model")]
+    pub gemini_expand_model: String,
+    /// Each Gemini model has its own daily bucket — 20 for the flash ones, 500
+    /// for the lite — so an exhausted model is a reason to try the next, not to
+    /// give up on the provider.
+    #[serde(default = "default_gemini_ladder")]
+    pub gemini_ladder: Vec<String>,
+    /// Gemini sends no rate-limit header, so the total has to be written down.
+    /// 20 a day is what the free tier shows for the flash models.
+    #[serde(default = "default_gemini_daily_limit")]
+    pub gemini_daily_limit: u32,
+    /// Searching by meaning runs on this machine, with no provider and no key.
+    /// Only one model is valid — the stored vectors are its width — but the
+    /// name is kept so a future change of model has somewhere to be recorded.
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
+    /// Vectors are a derived index, like a screenshot's OCR and the full-text
+    /// index — both of which the app keeps current without being asked. Nothing
+    /// in the vault is rewritten, so the rule about not touching your notes
+    /// unbidden does not reach this.
+    #[serde(default = "yes")]
+    pub auto_embed: bool,
+}
+
+impl Settings {
+    /// Replaces model names the provider has retired.
+    ///
+    /// Without this, changing a default fixes nothing for anyone who already
+    /// ran the app: `serde(default)` only fills a field that is *missing*, and
+    /// a saved settings file has the dead name written in it. Healing on read
+    /// rather than migrating on write means it also fixes a file someone
+    /// restored from a backup.
+    fn heal(&mut self) {
+        for model in [
+            &mut self.groq_model,
+            &mut self.gemini_model,
+            &mut self.gemini_expand_model,
+            &mut self.embedding_model,
+        ] {
+            if crate::provider::RETIRED_MODELS.contains(&model.as_str()) {
+                *model = String::new();
+            }
+        }
+        if self.groq_model.is_empty() {
+            self.groq_model = default_groq_model();
+        }
+        if self.gemini_model.is_empty() {
+            self.gemini_model = default_gemini_model();
+        }
+        if self.gemini_expand_model.is_empty() {
+            self.gemini_expand_model = default_gemini_expand_model();
+        }
+        if self.embedding_model.is_empty() {
+            self.embedding_model = default_embedding_model();
+        }
+    }
 }
 
 fn default_groq_model() -> String {
@@ -38,6 +97,29 @@ fn default_groq_model() -> String {
 
 fn default_gemini_model() -> String {
     crate::provider::DEFAULT_GEMINI_MODEL.to_string()
+}
+
+fn default_gemini_expand_model() -> String {
+    crate::provider::DEFAULT_GEMINI_EXPAND_MODEL.to_string()
+}
+
+fn default_gemini_daily_limit() -> u32 {
+    20
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_embedding_model() -> String {
+    "multilingual-e5-small".to_string()
+}
+
+fn default_gemini_ladder() -> Vec<String> {
+    ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-lite-latest"]
+        .iter()
+        .map(|model| model.to_string())
+        .collect()
 }
 
 /// Nothing is exposed until it is asked for once: the first run serves only to
@@ -51,6 +133,11 @@ impl Default for Settings {
             excluded: Vec::new(),
             groq_model: default_groq_model(),
             gemini_model: default_gemini_model(),
+            gemini_expand_model: default_gemini_expand_model(),
+            gemini_ladder: default_gemini_ladder(),
+            gemini_daily_limit: default_gemini_daily_limit(),
+            embedding_model: default_embedding_model(),
+            auto_embed: true,
         }
     }
 }
@@ -60,10 +147,12 @@ pub fn path(root: &Path) -> PathBuf {
 }
 
 pub fn load(root: &Path) -> Settings {
-    std::fs::read_to_string(path(root))
+    let mut settings: Settings = std::fs::read_to_string(path(root))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    settings.heal();
+    settings
 }
 
 pub fn save(root: &Path, settings: &Settings) -> Result<(), String> {
@@ -111,5 +200,31 @@ mod tests {
     fn the_settings_are_invisible_to_the_vault() {
         let dir = TempDir::new().unwrap();
         assert!(vault::is_ignored(dir.path(), &path(dir.path())));
+    }
+
+    /// The case that actually bit: an install from before the model was retired
+    /// keeps working after an update, without anyone editing a file by hand.
+    #[test]
+    fn a_retired_model_is_replaced_when_the_settings_are_read() {
+        let dir = TempDir::new().unwrap();
+        let mut stored = Settings::default();
+        stored.groq_model = "llama-3.3-70b-versatile".to_string();
+        save(dir.path(), &stored).unwrap();
+
+        let read = load(dir.path());
+
+        assert_eq!(read.groq_model, crate::provider::DEFAULT_GROQ_MODEL);
+        assert!(!crate::provider::RETIRED_MODELS.contains(&read.groq_model.as_str()));
+    }
+
+    /// A name nobody has retired is left alone: healing must not undo a choice.
+    #[test]
+    fn a_model_the_user_picked_survives_the_reading() {
+        let dir = TempDir::new().unwrap();
+        let mut stored = Settings::default();
+        stored.groq_model = "openai/gpt-oss-20b".to_string();
+        save(dir.path(), &stored).unwrap();
+
+        assert_eq!(load(dir.path()).groq_model, "openai/gpt-oss-20b");
     }
 }

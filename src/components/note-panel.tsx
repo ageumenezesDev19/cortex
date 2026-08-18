@@ -2,6 +2,7 @@ import { Code2, TriangleAlert, Type } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { getNote, pasteImage, writeNote, type NoteContent } from "../lib/api"
+import { usePick } from "./language-provider"
 import { headingIndexAt, roundTripReport, type RoundTrip } from "../lib/markdown"
 import { RichEditor } from "./rich-editor"
 
@@ -15,7 +16,41 @@ type Props = {
   root: string
 }
 
+const content = {
+  en: {
+    saving: "saving…",
+    saved: "saved",
+    asText: "Text (Cmd+E)",
+    asMarkdown: "Markdown (Cmd+E)",
+    seeText: "See it as text",
+    seeMarkdown: "See the markdown",
+    text: "text",
+    markdown: "markdown",
+    line: (n: number) => `Line ${n}`,
+    somewhere: "A passage of this note",
+    unsupported: "uses markup the plain editor does not represent",
+    keptInMarkdown: "In markdown it stays intact.",
+    rewritten: "Saving from here will rewrite it; markdown preserves it.",
+  },
+  pt: {
+    saving: "salvando…",
+    saved: "salvo",
+    asText: "Texto (Cmd+E)",
+    asMarkdown: "Markdown (Cmd+E)",
+    seeText: "Ver como texto",
+    seeMarkdown: "Ver o markdown",
+    text: "texto",
+    markdown: "markdown",
+    line: (n: number) => `A linha ${n}`,
+    somewhere: "Um trecho desta nota",
+    unsupported: "usa marcação que o editor de texto não representa",
+    keptInMarkdown: "No markdown ela fica intacta.",
+    rewritten: "Salvar daqui vai reescrevê-la; o markdown preserva.",
+  },
+}
+
 export function NotePanel({ path, anchorStart, root }: Props) {
+  const t = usePick()(content)
   const [note, setNote] = useState<NoteContent | null>(null)
   const [draft, setDraft] = useState("")
   const [raw, setRaw] = useState(false)
@@ -124,18 +159,18 @@ export function NotePanel({ path, anchorStart, root }: Props) {
         </span>
 
         <span className="font-mono text-xs text-muted-foreground">
-          {dirty ? "salvando…" : "salvo"}
+          {dirty ? t.saving : t.saved}
         </span>
 
         <button
           type="button"
           onClick={() => setRaw((value) => !value)}
-          title={raw ? "Texto (Cmd+E)" : "Markdown (Cmd+E)"}
-          aria-label={raw ? "Ver como texto" : "Ver o markdown"}
+          title={raw ? t.asText : t.asMarkdown}
+          aria-label={raw ? t.seeText : t.seeMarkdown}
           className="flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           {raw ? <Type className="size-3.5" aria-hidden /> : <Code2 className="size-3.5" aria-hidden />}
-          {raw ? "texto" : "markdown"}
+          {raw ? t.text : t.markdown}
         </button>
       </header>
 
@@ -143,12 +178,9 @@ export function NotePanel({ path, anchorStart, root }: Props) {
         <p className="mb-3 flex shrink-0 items-start gap-2 rounded-md border border-found/40 bg-found/10 px-3 py-2 text-xs text-muted-foreground">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-found" aria-hidden />
           <span>
-            {check.line > 0 ? `A linha ${check.line}` : "Um trecho desta nota"} usa marcação que o
-            editor de texto não representa
+            {check.line > 0 ? t.line(check.line) : t.somewhere} {t.unsupported}
             {check.text && <> — <code className="font-mono">{truncate(check.text)}</code></>}.{" "}
-            {raw
-              ? "No markdown ela fica intacta."
-              : "Salvar daqui vai reescrevê-la; o markdown preserva."}
+            {raw ? t.keptInMarkdown : t.rewritten}
           </span>
         </p>
       )}

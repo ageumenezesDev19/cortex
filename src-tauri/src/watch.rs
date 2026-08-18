@@ -54,6 +54,7 @@ fn run(app: &AppHandle, root: PathBuf) -> Result<()> {
         emit(app, &indexer, "ocr", Some(label), pending.len() - done);
         run_ocr(app, &mut indexer, image);
     }
+    embed_waiting(app, &indexer);
     emit(app, &indexer, "idle", None, 0);
 
     for result in rx {
@@ -65,10 +66,53 @@ fn run(app: &AppHandle, root: PathBuf) -> Result<()> {
             }
         }
         if touched {
+            embed_waiting(app, &indexer);
             emit(app, &indexer, "idle", None, 0);
         }
     }
     Ok(())
+}
+
+/// Vectors for whatever has none, on this thread and for the same reason the
+/// OCR is on it: slow, external, per item, and part of the index rather than a
+/// button someone has to remember.
+///
+/// Silent with no Gemini key — that is the optional half of the app being
+/// absent, not a failure — and quiet again after a refusal, which the next
+/// change to the vault retries.
+fn embed_waiting(app: &AppHandle, indexer: &Indexer) {
+    let root = indexer.root().to_path_buf();
+    if !crate::embed::wanted(&root) {
+        return;
+    }
+    let model = crate::settings::load(&root).embedding_model;
+    // A cancel stops the pass it was pressed during, not the feature — the
+    // switch in the panel is what turns this off. Without the reset, one cancel
+    // would leave the automatic pass dead until someone ran it by hand.
+    crate::commands::resume_embedding();
+
+    let outcome = crate::embed::drain(
+        &root,
+        indexer.connection(),
+        &model,
+        |done, total| emit_embedding(app, indexer, done, total),
+        crate::commands::embedding_cancelled,
+    );
+    if let Err(reason) = outcome {
+        eprintln!("[cortex] embedding parou: {reason}");
+    }
+}
+
+fn emit_embedding(app: &AppHandle, indexer: &Indexer, done: u32, total: u32) {
+    let _ = app.emit(
+        STATUS_EVENT,
+        Status {
+            phase: "embedding",
+            counts: indexer.counts().unwrap_or_default(),
+            current: Some(format!("{done} de {total}")),
+            pending: total.saturating_sub(done) as usize,
+        },
+    );
 }
 
 /// Returns whether the change altered the index.
@@ -139,11 +183,15 @@ fn classify(root: &Path, image: &Path, result: &mut ocr::OcrResult) {
     );
 
     // A mark is also a topic, so the chip that already scopes the search can
-    // scope it to "only styling" without any new interface.
+    // scope it to "only styling" without any new interface. The name and the
+    // icon come from the vocabulary file now, not from a match in the code.
+    let vocabulary = crate::marks::load(root);
     for mark in marks.all() {
-        let (name, icon) = crate::classify::presentation(&mark);
+        let (name, icon) = vocabulary.presentation(&mark);
         let slug = crate::classify::slug_of(&mark);
-        if let Err(error) = crate::topics::add_auto_member(root, &slug, &name, icon, &relative) {
+        if let Err(error) =
+            crate::topics::add_auto_member(root, &slug, &name, icon.as_deref(), &relative)
+        {
             eprintln!("[cortex] could not file {relative} under {slug}: {error:#}");
         }
     }

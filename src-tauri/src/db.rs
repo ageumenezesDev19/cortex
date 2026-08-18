@@ -3,9 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::Connection;
 
-/// Bumped whenever the schema changes. Migration 3 is reserved for the vector
-/// index (M5).
-const SCHEMA_VERSION: i32 = 2;
+/// Bumped whenever the schema changes.
+const SCHEMA_VERSION: i32 = 5;
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -40,6 +39,15 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if version < 2 {
         conn.execute_batch(SCHEMA_V2)?;
+    }
+    if version < 3 {
+        conn.execute_batch(SCHEMA_V3)?;
+    }
+    if version < 4 {
+        conn.execute_batch(SCHEMA_V4)?;
+    }
+    if version < 5 {
+        conn.execute_batch(SCHEMA_V5)?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -123,4 +131,80 @@ CREATE TABLE topic_members (
 );
 
 CREATE INDEX topic_members_target_idx ON topic_members(target_path);
+"#;
+
+/// The name of a note and where it lives are as much of an answer as its prose:
+/// searching `fastify` should find `node-js-fastify.md` even when the word is
+/// only in the file name. They are copied onto the chunk rather than joined at
+/// query time because the FTS table indexes its content table by rowid.
+///
+/// Nothing is deleted here. Clearing `content_hash` is what makes the scanner
+/// read every note again — the parser stopped emitting a chunk for a heading
+/// with no body, and those are already in the index. `assets` keeps its OCR.
+const SCHEMA_V3: &str = r#"
+ALTER TABLE chunks ADD COLUMN title TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunks ADD COLUMN path  TEXT NOT NULL DEFAULT '';
+
+UPDATE chunks SET
+  title = COALESCE((SELECT n.title FROM notes n WHERE n.id = chunks.note_id), ''),
+  path  = COALESCE(
+            (SELECT n.path FROM notes  n WHERE n.id = chunks.note_id),
+            (SELECT a.path FROM assets a WHERE a.id = chunks.asset_id), '');
+
+DROP TRIGGER chunks_ai;
+DROP TRIGGER chunks_ad;
+DROP TRIGGER chunks_au;
+DROP TABLE chunks_fts;
+
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+  text, title, path,
+  content='chunks',
+  content_rowid='id',
+  tokenize="unicode61 remove_diacritics 2"
+);
+
+CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts(rowid, text, title, path)
+  VALUES (new.id, new.text, new.title, new.path);
+END;
+
+CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunks_fts(chunks_fts, rowid, text, title, path)
+  VALUES ('delete', old.id, old.text, old.title, old.path);
+END;
+
+CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+  INSERT INTO chunks_fts(chunks_fts, rowid, text, title, path)
+  VALUES ('delete', old.id, old.text, old.title, old.path);
+  INSERT INTO chunks_fts(rowid, text, title, path)
+  VALUES (new.id, new.text, new.title, new.path);
+END;
+
+INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
+
+UPDATE notes SET content_hash = '';
+"#;
+
+/// Passages by meaning. Optional by nature: a vault without them searches
+/// exactly as it did before.
+///
+/// The vector is a blob of little-endian f32 rather than a table of numbers —
+/// nothing queries inside it, the whole thing is read at once and compared in
+/// memory. `text_hash` is the opening of the passage, so a rewritten note
+/// leaves its old vector visibly stale instead of quietly wrong.
+const SCHEMA_V4: &str = r#"
+CREATE TABLE embeddings (
+  chunk_id   INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+  vector     BLOB NOT NULL,
+  text_hash  TEXT NOT NULL
+);
+"#;
+
+/// Embedding moved from Gemini to a model running on this machine, and the two
+/// produce vectors of different widths — 768 against 384. A 768-wide vector is
+/// not stale data to be refreshed, it is a measurement in another unit, so the
+/// table is emptied rather than migrated. `pending` then lists every passage
+/// again on its own, with no migration code to maintain.
+const SCHEMA_V5: &str = r#"
+DELETE FROM embeddings;
 "#;

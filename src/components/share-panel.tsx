@@ -1,4 +1,4 @@
-import { Check, Copy, Loader2, TriangleAlert, X } from "lucide-react"
+import { Check, Copy, TriangleAlert, X } from "lucide-react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import QRCode from "qrcode"
 import { useCallback, useEffect, useState } from "react"
@@ -12,6 +12,7 @@ import {
   type TestStep,
 } from "../lib/api"
 import { cn } from "../lib/utils"
+import { ProgressLine } from "./progress-line"
 
 /**
  * Where the vault is opened up to the phone, and where it is closed again.
@@ -82,12 +83,11 @@ export function SharePanel({ open, onClose }: { open: boolean; onClose: () => vo
               O vault continua só aqui — o telefone é uma janela.
             </p>
 
-            {!state && !error && (
-              <p className="mt-4 flex items-center gap-2 font-mono text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                lendo o estado…
-              </p>
-            )}
+            {!state && !error && <div className="mt-4"><ProgressLine label="lendo o estado…" /></div>}
+
+            {/* Turning Tailscale on runs a command and waits on a daemon; the
+                switches go quiet meanwhile and this is what says why. */}
+            {busy && <div className="mt-4"><ProgressLine label="aplicando…" /></div>}
 
             {state && (
               <>
@@ -257,10 +257,15 @@ function Address({
           disabled={testing}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
         >
-          {testing && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
           testar conexão
         </button>
       </div>
+
+      {testing && (
+        <div className="mt-3">
+          <ProgressLine label="seguindo a mesma trilha do telefone…" />
+        </div>
+      )}
 
       {steps && (
         <ul className="mt-3 space-y-1.5">

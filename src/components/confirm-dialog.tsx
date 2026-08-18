@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useRef } from "react"
+import { usePick } from "./language-provider"
 
 type Props = {
   open: boolean
@@ -16,6 +17,8 @@ type Props = {
  * language rather than the system dialog, because the app has to stand on its
  * own — and because a native sheet cannot say what this is about.
  */
+const content = { en: { cancel: "Cancel" }, pt: { cancel: "Cancelar" } }
+
 export function ConfirmDialog({
   open,
   title,
@@ -24,6 +27,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  const t = usePick()(content)
   const reduceMotion = useReducedMotion()
   const confirm = useRef<HTMLButtonElement>(null)
 
@@ -63,7 +67,7 @@ export function ConfirmDialog({
                 onClick={onCancel}
                 className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
-                Cancelar
+                {t.cancel}
               </button>
               <button
                 ref={confirm}

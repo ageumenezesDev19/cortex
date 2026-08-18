@@ -44,6 +44,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["net", "rt"] }
 # The web bundle travels inside the .app; nothing loose to lose next to it.
 include_dir = "0.7"
+fastembed = { version = "6.0.0", default-features = false, features = ["hf-hub", "hf-hub-native-tls", "ort-download-binaries-native-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

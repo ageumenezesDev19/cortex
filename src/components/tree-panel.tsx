@@ -1,12 +1,12 @@
-import { ChevronDown, ChevronLeft, ChevronRight, FilePlus, FileText, FolderPlus, Image as ImageIcon, MoreHorizontal, Pencil, Trash2, X } from "lucide-react"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { useState } from "react"
+import { ChevronDown, ChevronLeft, ChevronRight, FilePlus, FileText, FolderPlus, Image as ImageIcon, MoreHorizontal, X } from "lucide-react"
+import { motion, useReducedMotion } from "motion/react"
+import { forwardRef, useEffect, useRef, useState } from "react"
 
 import type { TreeEntry } from "../lib/api"
+import { usePick } from "./language-provider"
 import { cn } from "../lib/utils"
 
 type Props = {
-  open: boolean
   tree: TreeEntry[]
   activePath: string | null
   onClose: () => void
@@ -23,23 +23,43 @@ type Props = {
  * look at before this — the app could find a note but never show you what you
  * had.
  */
-export function TreePanel({
-  open,
-  tree,
-  activePath,
-  onClose,
-  onOpen,
-  onCreateNote,
-  onCreateFolder,
-  onRename,
-  onDelete,
-}: Props) {
+/**
+ * The ref is forwarded because `AnimatePresence mode="popLayout"` has to reach
+ * the real element to take it out of the flow while it leaves — without it the
+ * panel on its way out keeps holding its column.
+ */
+const content = {
+  en: {
+    newNoteRoot: "New note at the root",
+    newFolderRoot: "New folder at the root",
+    close: "Close the vault",
+    newNoteHere: "New note here",
+    newFolderHere: "New folder here",
+    rename: "Rename",
+    remove: "Delete",
+  },
+  pt: {
+    newNoteRoot: "Nova nota na raiz",
+    newFolderRoot: "Nova pasta na raiz",
+    close: "Fechar vault",
+    newNoteHere: "Nova nota aqui",
+    newFolderHere: "Nova pasta aqui",
+    rename: "Renomear",
+    remove: "Apagar",
+  },
+}
+
+export const TreePanel = forwardRef<HTMLElement, Props>(function TreePanel(
+  { tree, activePath, onClose, onOpen, onCreateNote, onCreateFolder, onRename, onDelete },
+  ref,
+) {
+  const t = usePick()(content)
   const reduceMotion = useReducedMotion()
+  const list = useScrollGuard()
 
   return (
-    <AnimatePresence>
-      {open && (
         <motion.aside
+          ref={ref}
           initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
           animate={{ opacity: 1, x: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
@@ -63,21 +83,23 @@ export function TreePanel({
             <div className="flex items-center gap-1">
               <IconButton
                 icon={FilePlus}
-                label="Nova nota na raiz"
+                label={t.newNoteRoot}
                 onClick={() => onCreateNote("")}
               />
               <IconButton
                 icon={FolderPlus}
-                label="Nova pasta na raiz"
+                label={t.newFolderRoot}
                 onClick={() => onCreateFolder("")}
               />
               <span className="hidden sm:block">
-                <IconButton icon={X} label="Fechar vault" onClick={onClose} />
+                <IconButton icon={X} label={t.close} onClick={onClose} />
               </span>
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {/* `data-scrolling` turns the rows to stone for the length of a
+              scroll — see `useScrollGuard`. */}
+          <div ref={list} className="scroll-y flex-1 p-2 data-[scrolling]:[&_button]:pointer-events-none">
             {tree.map((entry) => (
               <Node
                 key={entry.path}
@@ -98,10 +120,38 @@ export function TreePanel({
               </p>
             )}
           </div>
-        </motion.aside>
-      )}
-    </AnimatePresence>
+    </motion.aside>
   )
+})
+
+/**
+ * No browser recomputes `:hover` while a list scrolls under a pointer that is
+ * not moving: the row that was there keeps the highlight until the mouse moves
+ * again. Blocking pointer events for the length of the scroll drops the stale
+ * row, and the next movement lands on the right one.
+ */
+function useScrollGuard() {
+  const list = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const node = list.current
+    if (!node) return
+
+    let timer: number | undefined
+    const onScroll = () => {
+      node.dataset.scrolling = "true"
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => delete node.dataset.scrolling, 120)
+    }
+
+    node.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      node.removeEventListener("scroll", onScroll)
+      window.clearTimeout(timer)
+    }
+  }, [])
+
+  return list
 }
 
 function Node({
@@ -126,12 +176,15 @@ function Node({
 
   return (
     <div>
-      <div className="group flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5">
         <button
           type="button"
           onClick={() => (isFolder ? setExpanded((value) => !value) : onOpen(entry))}
           aria-expanded={isFolder ? expanded : undefined}
           aria-current={activePath === entry.path}
+          // The panel is 256 px wide and the names came out of Notes long: two
+          // folders read as `rocketseat-trilh…` with no way to tell them apart.
+          title={entry.name}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
           className={cn(
             "flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pr-1 text-left text-sm transition-colors",
@@ -150,36 +203,10 @@ function Node({
           <span className="min-w-0 truncate">{entry.name}</span>
         </button>
 
-        {/* One button on a phone, where four ate the file name and put delete
-            a stray tap from rename. The desktop keeps them inline on hover,
-            which is a pointer's affordance and works there. */}
-        <span className="hidden shrink-0 items-center transition-opacity focus-within:opacity-100 sm:flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
-          {isFolder && (
-            <>
-              <IconButton
-                icon={FilePlus}
-                label={`Nova nota em ${entry.name}`}
-                onClick={() => onCreateNote(entry.path)}
-              />
-              <IconButton
-                icon={FolderPlus}
-                label={`Nova pasta em ${entry.name}`}
-                onClick={() => onCreateFolder(entry.path)}
-              />
-            </>
-          )}
-          <IconButton
-            icon={Pencil}
-            label={`Renomear ${entry.name}`}
-            onClick={() => onRename(entry)}
-          />
-          <IconButton
-            icon={Trash2}
-            label={`Apagar ${entry.name}`}
-            onClick={() => onDelete(entry)}
-          />
-        </span>
-
+        {/* One button, always there, on both. The four icons revealed on hover
+            were a trail of half-lit rows the moment the list scrolled, because
+            hover is not recomputed while it does — and on the phone they ate
+            the file name and put delete a stray tap from rename. */}
         <RowMenu
           entry={entry}
           isFolder={isFolder}
@@ -212,8 +239,8 @@ function Node({
 }
 
 /**
- * The row's actions behind one button, on touch only. Deleting sits at the
- * bottom and reads in words — an icon beside rename is how the wrong file goes.
+ * The row's actions behind one button. Deleting sits at the bottom and reads in
+ * words — an icon beside rename is how the wrong file goes.
  */
 function RowMenu({
   entry,
@@ -230,17 +257,19 @@ function RowMenu({
   onRename: (entry: TreeEntry) => void
   onDelete: (entry: TreeEntry) => void
 }) {
+  const t = usePick()(content)
   const [open, setOpen] = useState(false)
   const close = () => setOpen(false)
 
   return (
-    <span className="relative shrink-0 sm:hidden">
+    <span className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-label={`Ações de ${entry.name}`}
         aria-expanded={open}
-        className="flex size-11 items-center justify-center rounded-md text-muted-foreground"
+        // 44 px for a thumb, the tighter 28 for a pointer.
+        className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground sm:size-7"
       >
         <MoreHorizontal className="size-4" aria-hidden />
       </button>
@@ -252,14 +281,14 @@ function RowMenu({
             {isFolder && (
               <>
                 <MenuItem
-                  label="Nova nota aqui"
+                  label={t.newNoteHere}
                   onClick={() => {
                     close()
                     onCreateNote(entry.path)
                   }}
                 />
                 <MenuItem
-                  label="Nova pasta aqui"
+                  label={t.newFolderHere}
                   onClick={() => {
                     close()
                     onCreateFolder(entry.path)
@@ -268,7 +297,7 @@ function RowMenu({
               </>
             )}
             <MenuItem
-              label="Renomear"
+              label={t.rename}
               onClick={() => {
                 close()
                 onRename(entry)
@@ -276,7 +305,7 @@ function RowMenu({
             />
             <span className="my-0.5 h-px bg-border" aria-hidden />
             <MenuItem
-              label="Apagar"
+              label={t.remove}
               destructive
               onClick={() => {
                 close()

@@ -1,9 +1,11 @@
-import { Loader2, Sparkles, X } from "lucide-react"
+import { FolderOpen, Sparkles, X } from "lucide-react"
 import { motion, useReducedMotion } from "motion/react"
 import { Fragment } from "react"
 
-import type { AiAnswer, Source } from "../lib/api"
+import { readable } from "../lib/failures"
+import type { AiAnswer, Place, Source } from "../lib/api"
 import { cn } from "../lib/utils"
+import { ProgressLine } from "./progress-line"
 
 type Props = {
   question: string
@@ -11,6 +13,10 @@ type Props = {
   error: string | null
   loading: boolean
   onOpenSource: (source: Source) => void
+  /** A place is a note: opening one is opening it, not filtering by it. */
+  onOpenPlace: (place: Place) => void
+  /** Kills the call. Not "stop showing it" — see `provider::cancel`. */
+  onCancel: () => void
   onClose: () => void
 }
 
@@ -27,6 +33,8 @@ export function AnswerPanel({
   error,
   loading,
   onOpenSource,
+  onOpenPlace,
+  onCancel,
   onClose,
 }: Props) {
   const reduceMotion = useReducedMotion()
@@ -59,19 +67,37 @@ export function AnswerPanel({
       </header>
 
       <div className="px-4 py-3">
-        {loading && (
-          <p className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            lendo suas notas…
-          </p>
-        )}
+        {loading && <ProgressLine label="lendo suas notas…" onCancel={onCancel} />}
 
         {error && !loading && (
-          <p className="font-mono text-xs text-muted-foreground">{error}</p>
+          <p className="text-xs text-muted-foreground">{readable(error)}</p>
         )}
 
         {answer && !loading && (
           <>
+            {/* Asked where something is, the places come before the prose:
+                they are the answer, and they came out of the search rather
+                than out of a model. */}
+            {answer.kind === "locate" && answer.places.length > 0 && (
+              <ul className="mb-3 space-y-1">
+                {answer.places.map((place) => (
+                  <li key={place.path}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenPlace(place)}
+                      className="flex w-full items-baseline gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-muted"
+                    >
+                      <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-sm">{place.title}</span>
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                        {place.folder || "raiz"} · {place.passages}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
               <Cited text={answer.text} sources={answer.sources} onOpen={onOpenSource} />
             </p>

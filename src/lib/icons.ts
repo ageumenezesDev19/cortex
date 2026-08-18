@@ -3,6 +3,7 @@ import {
   siAngular,
   siApple,
   siAstro,
+  siBlender,
   siBun,
   siC,
   siCloudflare,
@@ -82,7 +83,7 @@ const SOURCE = [
   siHtml5, siCss, siSass, siPython, siGo, siPhp, siC, siCplusplus, siSwift,
   siAndroid, siApple, siLinux, siFlutter, siExpo, siVuedotjs, siAngular,
   siAstro, siNestjs, siExpress, siFastapi, siGraphql, siRedux, siZod, siStripe,
-  siWebassembly,
+  siWebassembly, siBlender,
 ]
 
 export const BRAND_ICONS: BrandIcon[] = SOURCE.map((icon) => ({

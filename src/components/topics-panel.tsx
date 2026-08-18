@@ -1,14 +1,14 @@
 import { ChevronLeft, Plus, Trash2, X } from "lucide-react"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { Fragment, useState } from "react"
+import { motion, useReducedMotion } from "motion/react"
+import { Fragment, forwardRef, useState } from "react"
 
 import type { Topic } from "../lib/api"
+import { usePick } from "./language-provider"
 import { cn } from "../lib/utils"
 import { BrandIcon } from "./brand-icon"
 import { IconPicker } from "./icon-picker"
 
 type Props = {
-  open: boolean
   topics: Topic[]
   activeSlug: string | null
   onClose: () => void
@@ -27,6 +27,29 @@ type Props = {
  * Yours, then the app's, with the boundary marked. Sorting rather than two
  * lists keeps one scroll and one keyboard order.
  */
+const content = {
+  en: {
+    heading: "Topics",
+    close: "Close topics",
+    empty: "A topic gathers what is scattered across folders.",
+    newTopic: "New topic",
+    namePlaceholder: "topic name",
+    nameLabel: "Topic name",
+    create: "Create",
+    cancel: "Cancel",
+  },
+  pt: {
+    heading: "Tópicos",
+    close: "Fechar tópicos",
+    empty: "Um tópico junta o que está espalhado por várias pastas.",
+    newTopic: "Criar tópico",
+    namePlaceholder: "nome do tópico",
+    nameLabel: "Nome do tópico",
+    create: "Criar",
+    cancel: "Cancelar",
+  },
+}
+
 function ordered(topics: Topic[]) {
   const sorted = [...topics].sort((a, b) => Number(a.auto) - Number(b.auto))
   return sorted.map((topic, at) => ({
@@ -35,22 +58,22 @@ function ordered(topics: Topic[]) {
   }))
 }
 
-export function TopicsPanel({
-  open,
-  topics,
-  activeSlug,
-  onClose,
-  onPick,
-  onCreate,
-  onDelete,
-}: Props) {
+/**
+ * The ref is forwarded because `AnimatePresence mode="popLayout"` has to reach
+ * the real element to take it out of the flow while it leaves — without it the
+ * panel on its way out keeps holding its column.
+ */
+export const TopicsPanel = forwardRef<HTMLElement, Props>(function TopicsPanel(
+  { topics, activeSlug, onClose, onPick, onCreate, onDelete },
+  ref,
+) {
+  const t = usePick()(content)
   const reduceMotion = useReducedMotion()
   const [creating, setCreating] = useState(false)
 
   return (
-    <AnimatePresence>
-      {open && (
         <motion.aside
+          ref={ref}
           initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
           animate={{ opacity: 1, x: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -12 }}
@@ -69,19 +92,19 @@ export function TopicsPanel({
               voltar
             </button>
             <h2 className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
-              Tópicos
+              {t.heading}
             </h2>
             <button
               type="button"
               onClick={onClose}
-              aria-label="Fechar tópicos"
+              aria-label={t.close}
               className="hidden rounded p-1 text-muted-foreground hover:text-foreground sm:block"
             >
               <X className="size-4" aria-hidden />
             </button>
           </header>
 
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+          <div className="scroll-y flex-1 space-y-1 p-2">
             {/* Yours first, always. A dozen marks the app made for itself must
                 not bury the handful you curated. */}
             {ordered(topics).map(({ topic, startsAuto }, position) => (
@@ -130,7 +153,7 @@ export function TopicsPanel({
 
             {topics.length === 0 && !creating && (
               <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                Um tópico junta o que está espalhado por várias pastas.
+                {t.empty}
               </p>
             )}
           </div>
@@ -151,15 +174,13 @@ export function TopicsPanel({
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <Plus className="size-4" aria-hidden />
-                Criar tópico
+                {t.newTopic}
               </button>
             )}
           </div>
-        </motion.aside>
-      )}
-    </AnimatePresence>
+    </motion.aside>
   )
-}
+})
 
 function NewTopicForm({
   onCreate,
@@ -168,6 +189,7 @@ function NewTopicForm({
   onCreate: (name: string, icon: string | null, color: string | null) => void
   onCancel: () => void
 }) {
+  const t = usePick()(content)
   const [name, setName] = useState("")
   const [icon, setIcon] = useState<string | null>(null)
   const [color, setColor] = useState<string | null>(null)
@@ -184,10 +206,10 @@ function NewTopicForm({
       <input
         value={name}
         onChange={(event) => setName(event.target.value)}
-        placeholder="nome do tópico"
+        placeholder={t.namePlaceholder}
         spellCheck={false}
         autoFocus
-        aria-label="Nome do tópico"
+        aria-label={t.nameLabel}
         className="h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus:border-ring"
       />
 
@@ -205,14 +227,14 @@ function NewTopicForm({
           disabled={name.trim().length === 0}
           className="flex-1 rounded-md bg-primary px-2 py-1.5 text-sm text-primary-foreground disabled:opacity-40"
         >
-          Criar
+          {t.create}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground"
         >
-          Cancelar
+          {t.cancel}
         </button>
       </div>
     </form>

@@ -6,13 +6,16 @@ import "@fontsource-variable/archivo"
 import "@fontsource-variable/jetbrains-mono"
 
 import App from "./App"
+import { LanguageProvider } from "./components/language-provider"
 import { ThemeProvider } from "./components/theme-provider"
 import "./index.css"
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <ThemeProvider>
-      <App />
+      <LanguageProvider>
+        <App />
+      </LanguageProvider>
     </ThemeProvider>
   </React.StrictMode>,
 )

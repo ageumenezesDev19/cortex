@@ -6,10 +6,13 @@
 //!
 //!   cargo run --example classificar_amostra
 
-use cortex_lib::{classify, vault};
+use cortex_lib::{marks, vault};
 
 fn main() {
     let root = vault::ensure().expect("não consegui abrir o vault");
+    // The vocabulary is read from the vault now, so this checks what the app
+    // would actually decide — including anything added to the file by hand.
+    let vocabulary = marks::load(&root);
     let mut seen = 0;
     let mut marked = 0;
 
@@ -27,7 +30,7 @@ fn main() {
         let Some(text) = value.get("text").and_then(|t| t.as_str()) else { continue };
 
         seen += 1;
-        let (marks, score) = classify::by_rule(text);
+        let (marks, score) = vocabulary.by_rule(text);
         if !marks.is_empty() {
             marked += 1;
         }

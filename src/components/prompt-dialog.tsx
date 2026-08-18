@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useState } from "react"
+import { usePick } from "./language-provider"
 
 type Props = {
   open: boolean
@@ -12,6 +13,8 @@ type Props = {
 }
 
 /** Naming a note or a folder, without leaving the app to do it. */
+const content = { en: { cancel: "Cancel" }, pt: { cancel: "Cancelar" } }
+
 export function PromptDialog({
   open,
   title,
@@ -21,6 +24,7 @@ export function PromptDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  const t = usePick()(content)
   const reduceMotion = useReducedMotion()
   const [value, setValue] = useState(initialValue)
 
@@ -69,7 +73,7 @@ export function PromptDialog({
                 onClick={onCancel}
                 className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
-                Cancelar
+                {t.cancel}
               </button>
               <button
                 type="submit"

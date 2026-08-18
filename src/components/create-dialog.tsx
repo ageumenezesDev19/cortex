@@ -5,6 +5,30 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { suggestPlacement, type Topic, type TreeEntry } from "../lib/api"
 import { cn } from "../lib/utils"
 import { BrandIcon } from "./brand-icon"
+import { usePick } from "./language-provider"
+
+const content = {
+  en: {
+    title: "New note",
+    name: "Name",
+    placeholder: "what this note is about",
+    folder: "Folder",
+    root: "/ (vault root)",
+    topics: "Topics",
+    cancel: "Cancel",
+    create: "Create",
+  },
+  pt: {
+    title: "Nova nota",
+    name: "Nome",
+    placeholder: "do que trata esta nota",
+    folder: "Pasta",
+    root: "/ (raiz do vault)",
+    topics: "Tópicos",
+    cancel: "Cancelar",
+    create: "Criar",
+  },
+}
 
 /** Same beat as the search field: fast enough to feel like it already knew. */
 const SUGGEST_MS = 120
@@ -28,6 +52,7 @@ export function CreateDialog({
   onCreate,
 }: Props) {
   const reduceMotion = useReducedMotion()
+  const t = usePick()(content)
   const [title, setTitle] = useState("")
   const [folder, setFolder] = useState(startingFolder)
   const [chosen, setChosen] = useState<string[]>([])
@@ -85,7 +110,7 @@ export function CreateDialog({
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-6"
         >
           <motion.form
-            aria-label="Nova nota"
+            aria-label={t.title}
             initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
@@ -97,15 +122,15 @@ export function CreateDialog({
             onKeyDown={(event) => event.key === "Escape" && onCancel()}
             className="w-full max-w-md rounded-lg border bg-card p-5 shadow-xl"
           >
-            <h2 className="font-medium">Nova nota</h2>
+            <h2 className="font-medium">{t.title}</h2>
 
             <label className="mt-4 block">
-              <span className="font-mono text-xs text-muted-foreground">Nome</span>
+              <span className="font-mono text-xs text-muted-foreground">{t.name}</span>
               <input
                 ref={name}
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                placeholder="do que trata esta nota"
+                placeholder={t.placeholder}
                 spellCheck={false}
                 autoFocus
                 className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm outline-none focus:border-ring"
@@ -114,7 +139,7 @@ export function CreateDialog({
 
             <label className="mt-3 block">
               <span className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                Pasta
+                {t.folder}
                 {suggested && <Suggested />}
               </span>
               <select
@@ -126,7 +151,7 @@ export function CreateDialog({
                 }}
                 className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm outline-none focus:border-ring"
               >
-                <option value="">/ (raiz do vault)</option>
+                <option value="">{t.root}</option>
                 {folders.map((path) => (
                   <option key={path} value={path}>
                     {path}
@@ -138,7 +163,7 @@ export function CreateDialog({
             {topics.length > 0 && (
               <div className="mt-3">
                 <span className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                  Tópicos
+                  {t.topics}
                   {suggested && chosen.length > 0 && <Suggested />}
                 </span>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -169,14 +194,14 @@ export function CreateDialog({
                 onClick={onCancel}
                 className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
-                Cancelar
+                {t.cancel}
               </button>
               <button
                 type="submit"
                 disabled={title.trim().length === 0}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
               >
-                Criar
+                {t.create}
               </button>
             </div>
           </motion.form>

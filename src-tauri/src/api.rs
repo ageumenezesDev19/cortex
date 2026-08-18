@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::files;
 use crate::import;
-use crate::search::{self, Group};
+use crate::search;
 use crate::topics::{self, Topic};
 use crate::vault;
 
@@ -80,7 +80,7 @@ pub fn search(
     query: &str,
     topic: Option<&str>,
     limit: Option<u32>,
-) -> Answer<Vec<Group>> {
+) -> Answer<search::Found> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     search::run(&conn, query, topic, limit.unwrap_or(40)).map_err(|error| error.to_string())
 }
@@ -233,7 +233,7 @@ pub fn suggest_placement(state: &AppState, title: &str) -> Answer<Placement> {
         return Ok(Placement::default());
     }
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let groups = search::run(&conn, title, None, 12).map_err(|e| e.to_string())?;
+    let groups = search::run(&conn, title, None, 12).map_err(|e| e.to_string())?.groups;
     if groups.is_empty() {
         return Ok(Placement::default());
     }
@@ -367,15 +367,23 @@ pub fn remove_from_topic(state: &AppState, slug: &str, path: &str) -> Answer<Top
 
 /// Answers a question from the vault. Reachable from the phone too — the key
 /// stays here, and only the answer travels back.
-pub fn ask(state: &AppState, question: &str) -> Answer<crate::ask::Answer> {
+pub fn ask(state: &AppState, question: &str, token: Option<u64>) -> Answer<crate::ask::Answer> {
     let settings = crate::settings::load(&state.root);
+    // Borrowed as `&[&str]` so the chain can be walked without copying it.
+    let ladder: Vec<&str> = settings.gemini_ladder.iter().map(String::as_str).collect();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     crate::ask::run(
         &state.root,
         &conn,
         question,
         &settings.excluded,
-        (&settings.groq_model, &settings.gemini_model),
+        crate::ask::Models {
+            groq: &settings.groq_model,
+            gemini: &ladder,
+            gemini_expand: &settings.gemini_expand_model,
+            embedding: &settings.embedding_model,
+        },
+        token,
     )
 }
 
@@ -417,10 +425,11 @@ pub fn classify_one(state: &AppState, image: &Path) -> Answer<bool> {
     );
     let gained = !marks.is_empty();
 
+    let vocabulary = crate::marks::load(&state.root);
     for mark in marks.all() {
-        let (name, icon) = crate::classify::presentation(&mark);
+        let (name, icon) = vocabulary.presentation(&mark);
         let slug = crate::classify::slug_of(&mark);
-        topics::add_auto_member(&state.root, &slug, &name, icon, &relative)
+        topics::add_auto_member(&state.root, &slug, &name, icon.as_deref(), &relative)
             .map_err(|e| e.to_string())?;
     }
 
@@ -437,12 +446,44 @@ pub fn classify_one(state: &AppState, image: &Path) -> Answer<bool> {
 /// button will work, and nothing more than that.
 pub fn ai_status(state: &AppState) -> AiStatus {
     let settings = crate::settings::load(&state.root);
+    let usage = crate::usage::load(&state.root);
+
     AiStatus {
         keys: crate::secrets::presence(&state.root),
         excluded: settings.excluded,
+        coverage: state
+            .conn
+            .lock()
+            .map(|conn| crate::embed::coverage(&conn))
+            .unwrap_or_default(),
+        auto_embed: settings.auto_embed,
+        model_installed: crate::embed::model_present(),
+        quota: Quota {
+            // Groq states its own totals in every reply; Gemini states none, so
+            // its bar is this app's count against a number written down.
+            groq: usage.groq.reported.clone(),
+            groq_calls: usage.groq.calls,
+            gemini_calls: usage.gemini.calls,
+            gemini_daily_limit: settings.gemini_daily_limit,
+            gemini_resets_in: crate::usage::seconds_to_reset(),
+        },
         groq_model: settings.groq_model,
         gemini_model: settings.gemini_model,
+        gemini_expand_model: settings.gemini_expand_model,
     }
+}
+
+/// What is left of the day, from whoever knows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quota {
+    pub groq: crate::usage::Limits,
+    /// Counted here, and only useful before the provider has spoken today.
+    pub groq_calls: u32,
+    pub gemini_calls: u32,
+    pub gemini_daily_limit: u32,
+    /// Seconds to midnight Pacific, which is when Gemini's day turns.
+    pub gemini_resets_in: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -450,8 +491,17 @@ pub fn ai_status(state: &AppState) -> AiStatus {
 pub struct AiStatus {
     pub keys: crate::secrets::Presence,
     pub excluded: Vec<String>,
+    pub quota: Quota,
+    /// How much of the vault can be searched by meaning, and whether the app
+    /// keeps that current on its own.
+    pub coverage: crate::embed::Coverage,
+    pub auto_embed: bool,
+    /// Whether the weights are on this machine. Nothing about meaning works
+    /// without them, and only the panel's button may put them there.
+    pub model_installed: bool,
     pub groq_model: String,
     pub gemini_model: String,
+    pub gemini_expand_model: String,
 }
 
 /// What an import would do, so the confirmation can say it out loud.

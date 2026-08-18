@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect } from "react"
 
 import { assetUrl } from "../lib/api"
+import { usePick } from "./language-provider"
 
 /** Long enough to read and act on, short enough not to sit in the way. */
 const DISMISS_MS = 9000
@@ -27,7 +28,25 @@ type Props = {
  * real pipeline rather than guessing — `read` comes from the indexer's own
  * status events.
  */
+const content = {
+  en: {
+    saved: "Screenshot saved and already searchable",
+    reading: "Reading the text in the screenshot…",
+    dismiss: "Dismiss",
+    newNote: "Make a note from it",
+    open: "Open",
+  },
+  pt: {
+    saved: "Print salvo e já pesquisável",
+    reading: "Lendo o texto do print…",
+    dismiss: "Dispensar",
+    newNote: "Criar nota com ele",
+    open: "Abrir",
+  },
+}
+
 export function DropToast({ dropped, root, onDismiss, onOpen, onCreateNote }: Props) {
+  const t = usePick()(content)
   const reduceMotion = useReducedMotion()
 
   useEffect(() => {
@@ -62,12 +81,12 @@ export function DropToast({ dropped, root, onDismiss, onOpen, onCreateNote }: Pr
                 {dropped.read ? (
                   <>
                     <Check className="size-3.5 text-found" aria-hidden />
-                    Print salvo e já pesquisável
+                    {t.saved}
                   </>
                 ) : (
                   <>
                     <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden />
-                    Lendo o texto do print…
+                    {t.reading}
                   </>
                 )}
               </p>
@@ -79,7 +98,7 @@ export function DropToast({ dropped, root, onDismiss, onOpen, onCreateNote }: Pr
             <button
               type="button"
               onClick={onDismiss}
-              aria-label="Dispensar"
+              aria-label={t.dismiss}
               className="h-fit rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="size-3.5" aria-hidden />
@@ -93,7 +112,7 @@ export function DropToast({ dropped, root, onDismiss, onOpen, onCreateNote }: Pr
               className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-primary px-2 py-1.5 text-xs text-primary-foreground transition-opacity hover:opacity-90"
             >
               <FilePlus className="size-3.5" aria-hidden />
-              Criar nota com ele
+              {t.newNote}
             </button>
             <button
               type="button"
@@ -101,7 +120,7 @@ export function DropToast({ dropped, root, onDismiss, onOpen, onCreateNote }: Pr
               className="flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <ImageIcon className="size-3.5" aria-hidden />
-              Abrir
+              {t.open}
             </button>
           </div>
         </motion.aside>

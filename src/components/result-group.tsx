@@ -3,6 +3,7 @@ import { useState } from "react"
 
 import type { Group, Hit, Topic } from "../lib/api"
 import { cn } from "../lib/utils"
+import { usePick } from "./language-provider"
 import { BrandIcon } from "./brand-icon"
 import { ResultCard } from "./result-card"
 
@@ -21,6 +22,19 @@ type Props = {
  * A note appears once, with its matching passages inside it. Before this, a long
  * note filled the list with copies of its own title.
  */
+const content = {
+  en: {
+    more: (n: number) => `+${n} ${n === 1 ? "passage" : "passages"} in this note`,
+    addedTo: (name: string) => `Added to ${name}`,
+    topic: "topic",
+  },
+  pt: {
+    more: (n: number) => `+${n} ${n === 1 ? "trecho" : "trechos"} nesta nota`,
+    addedTo: (name: string) => `Adicionado a ${name}`,
+    topic: "tópico",
+  },
+}
+
 export function ResultGroup({
   group,
   query,
@@ -31,6 +45,7 @@ export function ResultGroup({
   onOpen,
   onAddToTopic,
 }: Props) {
+  const t = usePick()(content)
   const hidden = group.total - group.hits.length
 
   return (
@@ -70,9 +85,7 @@ export function ResultGroup({
         ))}
 
         {hidden > 0 && (
-          <p className="px-2 pb-1 font-mono text-xs text-muted-foreground">
-            +{hidden} {hidden === 1 ? "trecho" : "trechos"} nesta nota
-          </p>
+          <p className="px-2 pb-1 font-mono text-xs text-muted-foreground">{t.more(hidden)}</p>
         )}
       </div>
     </article>
@@ -89,13 +102,16 @@ function AddToTopic({
   path: string
   onAdd: (slug: string, path: string) => void
 }) {
+  const t = usePick()(content)
   const [open, setOpen] = useState(false)
   const [added, setAdded] = useState<string | null>(null)
 
   if (topics.length === 0) return null
 
   if (added) {
-    return <span className="shrink-0 font-mono text-xs text-muted-foreground">Adicionado a {added}</span>
+    return (
+      <span className="shrink-0 font-mono text-xs text-muted-foreground">{t.addedTo(added)}</span>
+    )
   }
 
   return (
@@ -110,7 +126,7 @@ function AddToTopic({
         )}
       >
         <Plus className="size-3" aria-hidden />
-        tópico
+        {t.topic}
       </button>
 
       {open && (

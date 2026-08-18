@@ -1,9 +1,33 @@
-import { Search, X } from "lucide-react"
+import { Search, Sparkles, X } from "lucide-react"
 import { useEffect } from "react"
 
 import type { Topic } from "../lib/api"
 import { cn } from "../lib/utils"
 import { BrandIcon } from "./brand-icon"
+import { usePick } from "./language-provider"
+
+const content = {
+  en: {
+    leaveTopic: (name: string) => `Leave the ${name} topic`,
+    filterTopic: "filter inside this topic",
+    searchVault: "search the vault",
+    searchLabel: "Search the vault",
+    aiOn: "AI in search: on",
+    aiOff: "AI in search: off",
+    aiLabel: "AI in search",
+    clear: "Clear the search",
+  },
+  pt: {
+    leaveTopic: (name: string) => `Sair do tópico ${name}`,
+    filterTopic: "filtrar neste tópico",
+    searchVault: "buscar no vault",
+    searchLabel: "Buscar no vault",
+    aiOn: "IA na busca: ligada",
+    aiOff: "IA na busca: desligada",
+    aiLabel: "IA na busca",
+    clear: "Limpar a busca",
+  },
+}
 
 type Props = {
   /** Held by the app so Escape can hand focus back from anywhere. */
@@ -14,6 +38,12 @@ type Props = {
   compact: boolean
   topic: Topic | null
   onClearTopic: () => void
+  /** Whether the AI is invited to this search. Kept per device. */
+  ai: boolean
+  onToggleAi: () => void
+  /** The demo has no provider and no key, so the switch would promise
+   *  something the page cannot do. */
+  hideAi?: boolean
 }
 
 /**
@@ -29,7 +59,12 @@ export function SearchField({
   compact,
   topic,
   onClearTopic,
+  ai,
+  onToggleAi,
+  hideAi = false,
 }: Props) {
+  const t = usePick()(content)
+
   useEffect(() => {
     // Not on a phone: focusing on load throws the keyboard up over the screen
     // before anyone asked to type.
@@ -56,7 +91,7 @@ export function SearchField({
           <button
             type="button"
             onClick={onClearTopic}
-            aria-label={`Sair do tópico ${topic.name}`}
+            aria-label={t.leaveTopic(topic.name)}
             className="rounded p-0.5 text-muted-foreground hover:text-foreground"
           >
             <X className="size-3" aria-hidden />
@@ -69,19 +104,40 @@ export function SearchField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={topic ? "filtrar neste tópico" : "buscar no vault"}
+        placeholder={topic ? t.filterTopic : t.searchVault}
         spellCheck={false}
         autoComplete="off"
         autoCapitalize="off"
         autoCorrect="off"
         enterKeyHint="search"
-        aria-label="Buscar no vault"
+        aria-label={t.searchLabel}
         className={cn(
           "w-full min-w-0 bg-transparent font-mono text-foreground outline-none",
           "placeholder:text-muted-foreground",
           compact ? "text-base" : "text-xl",
         )}
       />
+
+      {/* Inside the field because that is where the search is. Off, nothing
+          about the AI appears anywhere; on, any search can be handed to it —
+          and it stays a press, never automatic: one question costs two calls
+          to the provider, and the free tier is the whole point. */}
+      {!hideAi && (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={ai}
+        onClick={onToggleAi}
+        title={ai ? t.aiOn : t.aiOff}
+        aria-label={t.aiLabel}
+        className={cn(
+          "flex size-11 shrink-0 items-center justify-center rounded-md transition-colors sm:size-8",
+          ai ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Sparkles className="size-4" aria-hidden />
+      </button>
+      )}
 
       {/* Ours, not the browser's. `type="search"` draws a clear button on a Mac
           and none on an iPhone, which left emptying the field to the backspace
@@ -93,7 +149,7 @@ export function SearchField({
             onChange("")
             inputRef.current?.focus()
           }}
-          aria-label="Limpar a busca"
+          aria-label={t.clear}
           className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground sm:size-8"
         >
           <X className="size-4" aria-hidden />

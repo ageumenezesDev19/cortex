@@ -28,11 +28,14 @@ pub fn chunk_markdown(source: &str) -> Vec<Chunk> {
     let mut in_heading = false;
     let mut heading_level = 0u8;
     let mut heading_text = String::new();
+    // The heading this chunk opened with, to recognise a chunk that is nothing
+    // but it.
+    let mut opened_with = String::new();
 
     for (event, range) in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
-                push(&mut chunks, &heading_path, start, range.start, &text);
+                push(&mut chunks, &heading_path, start, range.start, &text, &opened_with);
                 text.clear();
                 start = range.start;
                 in_heading = true;
@@ -52,6 +55,7 @@ pub fn chunk_markdown(source: &str) -> Vec<Chunk> {
                     .join(HEADING_SEPARATOR);
                 // The heading is part of its own chunk's searchable text.
                 push_text(&mut text, &heading_text);
+                opened_with = heading_text.trim().to_string();
             }
             Event::Text(t) | Event::Code(t) => {
                 if in_heading {
@@ -64,7 +68,7 @@ pub fn chunk_markdown(source: &str) -> Vec<Chunk> {
             _ => {}
         }
     }
-    push(&mut chunks, &heading_path, start, source.len(), &text);
+    push(&mut chunks, &heading_path, start, source.len(), &text, &opened_with);
     chunks
 }
 
@@ -118,9 +122,24 @@ fn push_text(buffer: &mut String, piece: &str) {
     buffer.push_str(piece);
 }
 
-fn push(chunks: &mut Vec<Chunk>, heading_path: &str, start: usize, end: usize, text: &str) {
+/// A heading with nothing under it is not a passage. Indexed, it became a
+/// document of four words that bm25 ranks above real prose — 63 of the 671
+/// chunks in a real vault were exactly this, and they were what the AI got
+/// handed when it was asked where CSS lived. The note is still found by its
+/// title, which the search now weighs on its own.
+fn push(
+    chunks: &mut Vec<Chunk>,
+    heading_path: &str,
+    start: usize,
+    end: usize,
+    text: &str,
+    opened_with: &str,
+) {
     let text = text.trim();
     if text.is_empty() || end <= start {
+        return;
+    }
+    if !opened_with.is_empty() && text == opened_with {
         return;
     }
     chunks.push(Chunk {
@@ -143,6 +162,17 @@ mod tests {
         assert_eq!(chunks[0].heading_path, "Nota");
         assert_eq!(chunks[1].heading_path, "Nota › Cache");
         assert_eq!(chunks[2].heading_path, "Nota › Cache › Tags");
+    }
+
+    /// 63 of the 671 chunks in a real vault were exactly this, and bm25 ranked
+    /// them above prose because they are short.
+    #[test]
+    fn a_heading_with_nothing_under_it_is_not_a_passage() {
+        let src = "# My Brand (Print on demand):\n\n## Cultivation:\n\n## Tem corpo\n\numa frase aqui\n";
+        let chunks = chunk_markdown(src);
+
+        assert_eq!(chunks.len(), 1, "só o que tem corpo vira trecho");
+        assert_eq!(chunks[0].heading_path, "My Brand (Print on demand): › Tem corpo");
     }
 
     #[test]

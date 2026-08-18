@@ -12,7 +12,7 @@ use crate::api::{
     self, AppState, AssetContent, ImportPreview, NoteContent, Placement, VaultStatus,
 };
 use crate::import;
-use crate::search::Group;
+use crate::search;
 use crate::topics::Topic;
 use crate::serve;
 use crate::settings;
@@ -25,7 +25,7 @@ pub fn search(
     query: String,
     topic: Option<String>,
     limit: Option<u32>,
-) -> Result<Vec<Group>, String> {
+) -> Result<search::Found, String> {
     api::search(&state, &query, topic.as_deref(), limit)
 }
 
@@ -154,9 +154,20 @@ pub fn import_preview(state: State<AppState>) -> Result<ImportPreview, String> {
     api::import_preview(&state)
 }
 
+/// The token is the caller's handle on this call: `cancel_ask` uses it to kill
+/// the request rather than merely stop waiting for it.
 #[tauri::command]
-pub fn ask(state: State<AppState>, question: String) -> Result<crate::ask::Answer, String> {
-    api::ask(&state, &question)
+pub fn ask(
+    state: State<AppState>,
+    question: String,
+    token: Option<u64>,
+) -> Result<crate::ask::Answer, String> {
+    api::ask(&state, &question, token)
+}
+
+#[tauri::command]
+pub fn cancel_ask(token: u64) {
+    crate::provider::cancel(token);
 }
 
 #[tauri::command]
@@ -164,13 +175,209 @@ pub fn ai_status(state: State<AppState>) -> api::AiStatus {
     api::ai_status(&state)
 }
 
-/// The excluded list is the only part of the answer settings the app writes;
-/// the keys are the person's, in their own file.
+// Deciding what may leave this machine, and with what key, is the machine's
+// business — so these three are desktop-only, like the server switches. They
+// are absent from `serve::dispatch`, which is what puts them out of the phone's
+// reach: on the local network the session travels as plain HTTP.
+
+/// What the AI may read. Empty means the whole vault.
 #[tauri::command]
 pub fn set_excluded(state: State<AppState>, excluded: Vec<String>) -> Result<api::AiStatus, String> {
     let mut current = settings::load(&state.root);
     current.excluded = excluded;
     settings::save(&state.root, &current)?;
+    Ok(api::ai_status(&state))
+}
+
+/// Writes a key, or removes it when given nothing. What comes back is the
+/// status — whether a key is there and where it came from, never a value.
+#[tauri::command]
+pub fn set_key(
+    state: State<AppState>,
+    name: String,
+    value: Option<String>,
+) -> Result<api::AiStatus, String> {
+    crate::secrets::store(&state.root, &name, value.as_deref())?;
+    Ok(api::ai_status(&state))
+}
+
+/// Spends one request to hear the provider's own numbers, for a panel opened
+/// before the first question of the day. Groq only: on Gemini this would cost
+/// 5% of the daily quota to report the quota.
+#[tauri::command]
+pub fn refresh_quota(state: State<AppState>) -> Result<api::AiStatus, String> {
+    let settings = settings::load(&state.root);
+    crate::provider::check(&state.root, crate::provider::Provider::Groq, &settings.groq_model)?;
+    Ok(api::ai_status(&state))
+}
+
+/// The daily limit Gemini refuses to state. Yours to correct when Google moves
+/// it, the same as the model name.
+#[tauri::command]
+pub fn set_gemini_limit(state: State<AppState>, limit: u32) -> Result<api::AiStatus, String> {
+    let mut current = settings::load(&state.root);
+    current.gemini_daily_limit = limit;
+    settings::save(&state.root, &current)?;
+    Ok(api::ai_status(&state))
+}
+
+/// One real call to one provider. A key is only configured once it answers.
+#[tauri::command]
+pub fn test_key(state: State<AppState>, provider: crate::provider::Provider) -> Result<(), String> {
+    let settings = settings::load(&state.root);
+    let model = match provider {
+        crate::provider::Provider::Groq => settings.groq_model,
+        crate::provider::Provider::Gemini => settings.gemini_model,
+    };
+    crate::provider::check(&state.root, provider, &model)
+}
+
+pub const EMBED_EVENT: &str = "embed:status";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbedStatus {
+    phase: &'static str,
+    done: u32,
+    total: u32,
+    error: Option<String>,
+}
+
+/// A flag rather than a channel: one pass runs at a time, and the only thing
+/// the button has to say is "stop after this batch".
+static STOP_EMBEDDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn cancel_embedding() {
+    STOP_EMBEDDING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read by the automatic pass in the watcher, so one cancel stops whichever of
+/// the two is running.
+pub fn embedding_cancelled() -> bool {
+    STOP_EMBEDDING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Clears the flag at the start of a pass. Cancelling stops that pass; turning
+/// the feature off is the switch's job.
+pub fn resume_embedding() {
+    STOP_EMBEDDING.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Turning it off is a decision about someone's quota, so it is remembered.
+#[tauri::command]
+pub fn set_auto_embed(state: State<AppState>, on: bool) -> Result<api::AiStatus, String> {
+    let mut current = settings::load(&state.root);
+    current.auto_embed = on;
+    settings::save(&state.root, &current)?;
+    Ok(api::ai_status(&state))
+}
+
+/// Turns the vault into vectors, a hundred passages per call. Never on its own —
+/// this spends someone's quota — and it picks up where it stopped, so a
+/// cancelled pass is not a wasted one.
+#[tauri::command]
+pub fn embed_vault(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let root = state.root.clone();
+    let model = settings::load(&root).embedding_model;
+    resume_embedding();
+
+    std::thread::spawn(move || {
+        let emit = |phase, done, total, error| {
+            let _ = app.emit(EMBED_EVENT, EmbedStatus { phase, done, total, error });
+        };
+
+        let conn = match crate::db::open(&crate::vault::db_path(&root)) {
+            Ok(conn) => conn,
+            Err(error) => return emit("failed", 0, 0, Some(error.to_string())),
+        };
+        let total = crate::embed::pending(&conn).map(|waiting| waiting.len() as u32).unwrap_or(0);
+        emit("running", 0, total, None);
+
+        match crate::embed::drain(
+            &root,
+            &conn,
+            &model,
+            |done, total| emit("running", done, total, None),
+            embedding_cancelled,
+        ) {
+            Ok(done) => emit("done", done, total, None),
+            Err(error) => emit("failed", 0, total, Some(error)),
+        }
+    });
+
+    Ok(())
+}
+
+pub const MODEL_EVENT: &str = "model:status";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelStatus {
+    phase: &'static str,
+    /// Bytes, not passages: this is the download, not the embedding.
+    done: u64,
+    total: u64,
+    error: Option<String>,
+}
+
+/// Downloads the embedding model, which is the one moment this app reaches the
+/// network for the search to work at all. Never called on the app's own
+/// initiative — the button in the panel is the whole of the consent.
+///
+/// Progress is polled off the disk rather than reported by the downloader,
+/// which offers no callback. Bytes that landed are the one honest measure.
+#[tauri::command]
+pub fn download_model(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let model = settings::load(&state.root).embedding_model;
+
+    std::thread::spawn(move || {
+        let emit = |phase, done, total, error| {
+            let _ = app.emit(MODEL_EVENT, ModelStatus { phase, done, total, error });
+        };
+        emit("downloading", crate::embed::bytes_on_disk(), crate::embed::MODEL_BYTES, None);
+
+        let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let ticker = {
+            let watching = watching.clone();
+            let app = app.clone();
+            std::thread::spawn(move || {
+                while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let _ = app.emit(
+                        MODEL_EVENT,
+                        ModelStatus {
+                            phase: "downloading",
+                            done: crate::embed::bytes_on_disk(),
+                            total: crate::embed::MODEL_BYTES,
+                            error: None,
+                        },
+                    );
+                }
+            })
+        };
+
+        let outcome = crate::embed::fetch_model(&model);
+        watching.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = ticker.join();
+
+        match outcome {
+            Ok(()) => {
+                let landed = crate::embed::bytes_on_disk();
+                emit("ready", landed, landed, None)
+            }
+            Err(error) => emit("failed", 0, crate::embed::MODEL_BYTES, Some(error)),
+        }
+    });
+
+    Ok(())
+}
+
+/// Forgets the model and deletes the weights. The vectors already made stay:
+/// they are floats in the vault, and what is embedded stays searchable.
+#[tauri::command]
+pub fn delete_model(state: State<AppState>) -> Result<api::AiStatus, String> {
+    crate::embed::remove_model()?;
     Ok(api::ai_status(&state))
 }
 

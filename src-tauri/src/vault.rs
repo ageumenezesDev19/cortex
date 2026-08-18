@@ -97,7 +97,16 @@ pub fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
     }
     for component in candidate.components() {
         match component {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(name) => {
+                // The session token and the API keys live in `.server`, and
+                // `/asset/<path>` reaches this with whatever the caller typed.
+                // Nothing a person names goes in a dot folder, so refusing them
+                // here closes the door for every caller at once.
+                if name.to_string_lossy().starts_with('.') {
+                    return Err(anyhow!("caminho oculto não é aceito: {relative}"));
+                }
+            }
+            Component::CurDir => {}
             _ => return Err(anyhow!("caminho sai do vault: {relative}")),
         }
     }
@@ -272,6 +281,17 @@ mod tests {
         assert!(resolve(&root(), "../fora.md").is_err());
         assert!(resolve(&root(), "notas/../../fora.md").is_err());
         assert!(resolve(&root(), "/etc/passwd").is_err());
+    }
+
+    /// The session token and the API keys are in there, and `/asset/<path>`
+    /// takes whatever the caller asks for.
+    #[test]
+    fn refuses_the_folders_the_app_keeps_for_itself() {
+        assert!(resolve(&root(), ".server/env").is_err());
+        assert!(resolve(&root(), ".server/token").is_err());
+        assert!(resolve(&root(), ".index/cortex.db").is_err());
+        assert!(resolve(&root(), ".topics/react.json").is_err());
+        assert!(resolve(&root(), "notas/.server/env").is_err());
     }
 
     #[test]

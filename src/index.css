@@ -110,11 +110,24 @@
 
 @layer components {
   /*
+   * Every vertical scroller in the app. `overflow-y: auto` on its own promotes
+   * the other axis to `auto` as well, and iOS then locks the drag to whichever
+   * axis has room — a pasted URL is enough to steal the gesture. `min-h-0` is
+   * here because a flex child that cannot shrink is a scroller with no room to
+   * scroll in.
+   */
+  .scroll-y {
+    @apply min-h-0 overflow-y-auto overflow-x-hidden;
+  }
+
+  /*
    * The editable note. It carries no focus ring of its own — the caret is the
    * focus indicator here, the same way it is in any text you write into.
    */
+  /* A pasted URL has no spaces to break at; inside a note it would set the
+     minimum width of the whole reader. */
   .cortex-prose {
-    @apply px-1 pb-8 outline-none;
+    @apply break-words px-1 pb-8 outline-none;
   }
 
   .cortex-prose h1 {

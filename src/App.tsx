@@ -1,6 +1,6 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { ArrowLeft, FilePlus, FolderPlus, Sparkles } from "lucide-react"
-import { motion, useReducedMotion } from "motion/react"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ConfirmDialog } from "./components/confirm-dialog"
@@ -11,8 +11,10 @@ import { ImageReader } from "./components/image-reader"
 import { NotePanel } from "./components/note-panel"
 import { PromptDialog } from "./components/prompt-dialog"
 import { Rail } from "./components/rail"
+import { usePick } from "./components/language-provider"
 import { AnswerPanel } from "./components/answer-panel"
 import { ClassifyPanel } from "./components/classify-panel"
+import { SettingsPanel } from "./components/settings-panel"
 import { SharePanel } from "./components/share-panel"
 import { ResultGroup } from "./components/result-group"
 import { SearchField } from "./components/search-field"
@@ -23,6 +25,7 @@ import {
   addToTopic,
   aiStatus,
   ask as askVault,
+  cancelAsk,
   classifyExisting,
   classifyPreview,
   createFolder,
@@ -34,6 +37,7 @@ import {
   importNotes,
   uploadImage,
   importPreview,
+  isDemo,
   isDesktop,
   listTopics,
   listTree,
@@ -56,6 +60,7 @@ import {
   type TreeEntry,
   type VaultStatus,
 } from "./lib/api"
+import { useLocalToggle } from "./lib/prefs"
 import { cn } from "./lib/utils"
 import { useViewportHeight } from "./lib/viewport"
 
@@ -89,6 +94,8 @@ type Confirm =
 export default function App() {
   const [query, setQuery] = useState("")
   const [groups, setGroups] = useState<Group[]>([])
+  /** Set when nothing matched every word and the search accepted any of them. */
+  const [widened, setWidened] = useState<string[] | null>(null)
   const [selected, setSelected] = useState(0)
   const [open, setOpen] = useState<Open>(null)
   const [status, setStatus] = useState<IndexStatus | null>(null)
@@ -106,6 +113,7 @@ export default function App() {
   const [embedding, setEmbedding] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [settings, setSettings] = useState(false)
   const photo = useRef<HTMLInputElement>(null)
   const [answer, setAnswer] = useState<AiAnswer | null>(null)
   const [answering, setAnswering] = useState(false)
@@ -117,9 +125,16 @@ export default function App() {
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
 
+  const t = usePick()(content)
+  const [aiInSearch, toggleAiInSearch] = useLocalToggle("cortex:ai-search")
+  /** With the AI on, the literal list is behind a link rather than in the way. */
+  const [showingResults, setShowingResults] = useState(false)
+
   const reduceMotion = useReducedMotion()
   const keyboardOpen = useViewportHeight()
   const results = useRef<HTMLDivElement>(null)
+  /** The token of the answer being waited on, so a late one can be ignored. */
+  const asking = useRef<number | null>(null)
   const searchField = useRef<HTMLInputElement>(null)
 
   // Keyboard navigation runs over every passage on screen; it must not know
@@ -175,6 +190,46 @@ export default function App() {
 
   // Screenshots dropped on the window land in the vault; the watcher takes it
   // from there, exactly as if they had been saved from the Finder.
+  // The browser's own drag and paste, for the demo. Tauri has its own event
+  // below and never reaches this.
+  useEffect(() => {
+    if (!isDemo) return
+
+    const take = async (files: FileList | null) => {
+      const image = [...(files ?? [])].find((one) => one.type.startsWith("image/"))
+      if (!image) return
+      setDropping(false)
+      setDropped({ path: await uploadImage(image), read: false })
+    }
+
+    const over = (event: DragEvent) => {
+      event.preventDefault()
+      setDropping(true)
+    }
+    const leave = () => setDropping(false)
+    const drop = (event: DragEvent) => {
+      event.preventDefault()
+      void take(event.dataTransfer?.files ?? null).catch(() => setDropping(false))
+    }
+    const paste = (event: ClipboardEvent) => {
+      const image = [...(event.clipboardData?.items ?? [])]
+        .find((one) => one.type.startsWith("image/"))
+        ?.getAsFile()
+      if (image) void take({ 0: image, length: 1 } as unknown as FileList).catch(() => {})
+    }
+
+    window.addEventListener("dragover", over)
+    window.addEventListener("dragleave", leave)
+    window.addEventListener("drop", drop)
+    window.addEventListener("paste", paste)
+    return () => {
+      window.removeEventListener("dragover", over)
+      window.removeEventListener("dragleave", leave)
+      window.removeEventListener("drop", drop)
+      window.removeEventListener("paste", paste)
+    }
+  }, [])
+
   useEffect(() => {
     // Dragging a file onto the window is a desktop gesture; the phone sends a
     // photo through the picker instead.
@@ -200,12 +255,14 @@ export default function App() {
     const term = query.trim()
     if (term.length === 0 && !topic) {
       setGroups([])
+      setWidened(null)
       return
     }
     const timer = setTimeout(() => {
       search(term, topic?.slug ?? null)
         .then((found) => {
-          setGroups(found)
+          setGroups(found.groups)
+          setWidened(found.widened ? found.terms : null)
           setSelected(0)
         })
         .catch(() => setGroups([]))
@@ -235,13 +292,34 @@ export default function App() {
    * screen — the answer is an extra, never the only road.
    */
   const runAsk = useCallback((question: string) => {
+    setShowingResults(false)
+    // Random rather than sequential: the phone and the Mac ask the same server,
+    // and a counter starting at 1 on both would let one cancel the other.
+    const token = Math.floor(Math.random() * 2 ** 48)
+    asking.current = token
     setAnswering(true)
     setAnswer(null)
     setAnswerError(null)
-    askVault(question)
-      .then(setAnswer)
-      .catch((reason) => setAnswerError(String(reason).replace(/^Error:\s*/, "")))
-      .finally(() => setAnswering(false))
+    askVault(question, token)
+      .then((answer) => asking.current === token && setAnswer(answer))
+      .catch((reason) => {
+        // A cancelled call comes back as an error; the person already knows.
+        if (asking.current !== token) return
+        setAnswerError(String(reason).replace(/^Error:\s*/, ""))
+      })
+      .finally(() => {
+        if (asking.current === token) setAnswering(false)
+      })
+  }, [])
+
+  /** Kills the call, rather than leaving it running with nobody listening. */
+  const cancelAnswer = useCallback(() => {
+    const token = asking.current
+    asking.current = null
+    setAnswering(false)
+    setAnswer(null)
+    setAnswerError(null)
+    if (token !== null) cancelAsk(token).catch(() => {})
   }, [])
 
   /** A citation lands on the passage through the same anchor a hit uses. */
@@ -327,7 +405,11 @@ export default function App() {
       move(-1)
     } else if (event.key === "Enter") {
       event.preventDefault()
-      if (hits[selected]) openHit(hits[selected])
+      // With the AI on, Enter is the question — the icon in the field already
+      // said the AI is doing the searching, so a second button to confirm it
+      // was a step that explained nothing.
+      if (aiInSearch && query.trim().length > 1) runAsk(query.trim())
+      else if (hits[selected]) openHit(hits[selected])
     } else if (event.key === "Backspace" && query.length === 0 && topic) {
       event.preventDefault()
       clearTopic()
@@ -352,6 +434,7 @@ export default function App() {
         onNewNote={() => setCreating("")}
         onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
         onShare={() => setSharing(true)}
+        onSettings={() => setSettings(true)}
         onClassify={() => {
           setClassifying(true)
           setClassifyStatus(null)
@@ -372,8 +455,14 @@ export default function App() {
       />
       )}
 
+      {/* One presence for both, and `popLayout` so the panel on its way out
+          stops holding its 256 px while the other one arrives. With one
+          AnimatePresence each, the two columns overlapped for 180 ms and the
+          search field jumped 180 px and came back. */}
+      <AnimatePresence mode="popLayout" initial={false}>
+        {panel === "topics" && (
       <TopicsPanel
-        open={panel === "topics"}
+        key="topics"
         topics={topics}
         activeSlug={topic?.slug ?? null}
         onClose={() => setPanel("none")}
@@ -388,9 +477,11 @@ export default function App() {
         }}
         onDelete={(target) => setConfirm({ kind: "topic", topic: target })}
       />
+        )}
 
+        {panel === "tree" && (
       <TreePanel
-        open={panel === "tree"}
+        key="tree"
         tree={tree}
         activePath={openPath}
         onClose={() => setPanel("none")}
@@ -410,8 +501,14 @@ export default function App() {
         onRename={(entry) => setAsk({ kind: "rename", entry })}
         onDelete={(entry) => setConfirm({ kind: "entry", entry })}
       />
+        )}
+      </AnimatePresence>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* `min-h-0` is what lets this shrink to the shell instead of growing to
+          the height of the note inside it. Without it the column overflowed,
+          and since the shell is `column-reverse` on a phone, the overflow was
+          cut off the top: no back button, no title, and nothing left to scroll. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <motion.div
           layout={!reduceMotion}
           transition={transition}
@@ -430,6 +527,9 @@ export default function App() {
             compact={browsing || open !== null}
             topic={topic}
             onClearTopic={clearTopic}
+            ai={!isDemo && aiInSearch}
+            onToggleAi={toggleAiInSearch}
+            hideAi={isDemo}
           />
           {!browsing && !open && (
             <EmptyState
@@ -437,6 +537,7 @@ export default function App() {
               dropping={dropping}
               onNewNote={() => setCreating("")}
               onNewFolder={() => setAsk({ kind: "new-folder", parent: "" })}
+              onTry={changeQuery}
             />
           )}
         </motion.div>
@@ -447,22 +548,18 @@ export default function App() {
               <div
                 ref={results}
                 className={cn(
-                  // `min-w-0` lets this shrink below its content, and
-                  // `overflow-x-hidden` keeps the CSS rule that turns a
-                  // `visible` axis into `auto` from handing the touch gesture
-                  // to the horizontal — which is what stopped the list
-                  // scrolling at all on the phone.
-                  "min-h-0 min-w-0 space-y-3 overflow-y-auto overflow-x-hidden",
+                  "scroll-y min-w-0 space-y-3",
                   open ? "hidden sm:block sm:w-[24rem] sm:shrink-0" : "mx-auto w-full max-w-3xl",
                 )}
               >
-                {/* A question is a search that ends in `?`. The button sits
-                    above the literal results, which never leave the screen. */}
-                {isQuestion(query) && (
-                  <AskBanner
+                {/* Before Enter, no list and no call: just whether there is
+                    anything to answer from. It comes out of the literal search,
+                    which costs nothing, so you know the AI has material before
+                    you spend a request on it. */}
+                {!isDemo && aiInSearch && !answer && !answering && !answerError && (
+                  <Readiness
                     ready={Boolean(ai?.keys.groq || ai?.keys.gemini)}
-                    busy={answering}
-                    onAsk={() => runAsk(query.trim())}
+                    notes={groups.length}
                   />
                 )}
 
@@ -473,6 +570,15 @@ export default function App() {
                     error={answerError}
                     loading={answering}
                     onOpenSource={openSource}
+                    onOpenPlace={(place) =>
+                      setOpen({
+                        kind: "note",
+                        path: place.path,
+                        anchorStart: null,
+                        from: "search",
+                      })
+                    }
+                    onCancel={cancelAnswer}
                     onClose={() => {
                       setAnswer(null)
                       setAnswerError(null)
@@ -480,7 +586,27 @@ export default function App() {
                   />
                 )}
 
-                {groups.map((group, position) => (
+                {/* A search that had to be widened says so. Nothing matched
+                    every word, and pretending otherwise is how the app would
+                    look like it answered the question it was asked. */}
+                {widened && groups.length > 0 && (
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {t.widened(widened.join(", "))}
+                  </p>
+                )}
+
+                {aiInSearch && (answer || answering) && !showingResults && (
+                  <button
+                    type="button"
+                    onClick={() => setShowingResults(true)}
+                    className="font-mono text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                  >
+                    ver os {groups.length} resultados da busca
+                  </button>
+                )}
+
+                {(!aiInSearch || showingResults || (!answer && !answering)) &&
+                  groups.map((group, position) => (
                   <motion.div
                     key={group.key}
                     initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
@@ -509,7 +635,7 @@ export default function App() {
                   </motion.div>
                 ))}
 
-                {groups.length === 0 && (
+                {groups.length === 0 && !aiInSearch && (
                   <p className="pt-8 text-center font-mono text-sm text-muted-foreground">
                     {topic && query.trim().length === 0
                       ? `nada em ${topic.name} ainda`
@@ -585,14 +711,16 @@ export default function App() {
         }}
       />
 
+      <SettingsPanel open={settings} onClose={() => setSettings(false)} onChanged={setAi} />
+
       <SharePanel open={sharing} onClose={() => setSharing(false)} />
 
       <PromptDialog
         open={ask !== null}
         title={promptTitle(ask)}
-        placeholder={ask?.kind === "new-folder" ? "nome da pasta" : "título da nota"}
+        placeholder={ask?.kind === "new-folder" ? t.folderName : t.noteTitle}
         initialValue={ask?.kind === "rename" ? ask.entry.name : ""}
-        confirmLabel={ask?.kind === "rename" ? "Renomear" : "Criar"}
+        confirmLabel={ask?.kind === "rename" ? t.rename : t.create}
         onCancel={() => setAsk(null)}
         onConfirm={(value) => {
           const action =
@@ -669,8 +797,8 @@ export default function App() {
       <ConfirmDialog
         open={confirm !== null}
         title={confirmTitle(confirm)}
-        detail={confirmDetail(confirm)}
-        confirmLabel={confirmLabel(confirm)}
+        detail={confirmDetail(confirm, t)}
+        confirmLabel={confirmLabel(confirm, t)}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           if (confirm?.kind === "topic") {
@@ -710,35 +838,94 @@ function confirmTitle(confirm: Confirm) {
   return ""
 }
 
+const content = {
+  en: {
+    folderName: "folder name",
+    noteTitle: "note title",
+    rename: "Rename",
+    create: "Create",
+    noKey: "To answer from here, put a Groq or Gemini key in the AI panel. Without one the search keeps working — just switch the icon off in the field.",
+    nothingFound: "nothing found — Enter asks anyway",
+    notesSpeak: (n: number) => `${n} ${n === 1 ? "note mentions" : "notes mention"} this · Enter to ask`,
+    emptyDesktop: "Empty vault. Start a note, or drag a screenshot into this window.",
+    emptyPhone: "Empty vault. Start a note, or send a photo with the +.",
+    howDesktop: "Type to search. Screenshots come in by dragging, or with Cmd+V inside a note.",
+    howPhone: "Type to search. Photos come in through the + down here.",
+    howDemo: "Ten notes on Blender, Rust, CSS, Git and bread. Search:",
+    dropHere: "Screenshots come in by dragging them here, or with Cmd+V inside a note.",
+    widened: (terms: string) => `nothing had every word — showing what mentions ${terms}`,
+    /** Phrases, not questions: a question expects an answer, and without a
+     *  provider this returns a list of notes. Each was measured against the
+     *  vault; the ones that landed on the wrong note were dropped. */
+    examples: [
+      "flat looking scene",
+      "wrong commit message",
+      "columns that resize on their own",
+      "borrow checker complaints",
+    ],
+    newNote: "New note",
+    newFolder: "New folder",
+    topicEmpty: "The topic gathers nothing yet, so nothing more is lost with it.",
+    topicKeeps: (n: number) =>
+      `The ${n} ${n === 1 ? "note or screenshot stays" : "notes and screenshots stay"} in the vault, untouched — but the list of what belongs to this topic is gone, and rebuilding it is by hand.`,
+    folderGone: "The folder and everything in it are deleted from disk. There is no undo.",
+    fileGone: "The file is deleted from disk and leaves the topics it was in. There is no undo.",
+    remove: (name: string) => `Delete ${name}`,
+    removePlain: "Delete",
+  },
+  pt: {
+    folderName: "nome da pasta",
+    noteTitle: "título da nota",
+    rename: "Renomear",
+    create: "Criar",
+    noKey: "Para responder daqui, ponha uma chave do Groq ou do Gemini no painel de IA. Sem ela a busca segue funcionando — é só desligar o ícone no campo.",
+    nothingFound: "nada encontrado — Enter pergunta assim mesmo",
+    notesSpeak: (n: number) => `${n} ${n === 1 ? "nota fala" : "notas falam"} disso · Enter para perguntar`,
+    emptyDesktop: "Vault vazio. Comece uma nota, ou arraste um print para esta janela.",
+    emptyPhone: "Vault vazio. Comece uma nota, ou mande uma foto pelo +.",
+    howDesktop: "Digite para buscar. Prints entram arrastando ou com Cmd+V dentro de uma nota.",
+    howPhone: "Digite para buscar. Fotos entram pelo + aqui embaixo.",
+    howDemo: "Dez notas sobre Blender, Rust, CSS, Git e pão. Busque:",
+    dropHere: "Prints entram arrastando para cá, ou com Cmd+V dentro de uma nota.",
+    widened: (terms: string) => `nada com todas as palavras — mostrando o que fala de ${terms}`,
+    examples: [
+      "mensagem de commit errada",
+      "colunas que mudam de tamanho sozinhas",
+      "reclamação do compilador",
+      "perder o foco quando interrompem",
+    ],
+    newNote: "Nova nota",
+    newFolder: "Nova pasta",
+    topicEmpty: "O tópico não reúne nada ainda, então nada mais se perde com ele.",
+    topicKeeps: (n: number) =>
+      `As ${n} ${n === 1 ? "nota ou print continua" : "notas e prints continuam"} no vault, intocadas — mas a lista de que ${n === 1 ? "pertence" : "pertencem"} a este tópico se perde, e refazer é na mão.`,
+    folderGone: "A pasta e tudo dentro dela são apagados do disco. Não dá para desfazer.",
+    fileGone: "O arquivo é apagado do disco e sai dos tópicos em que estava. Não dá para desfazer.",
+    remove: (name: string) => `Apagar ${name}`,
+    removePlain: "Apagar",
+  },
+}
+
 /**
  * Says what actually goes. The fear is always about the notes, and they stay —
  * but the curation is the work, and that is what leaves. No word from the code
  * ("manifest", "index") belongs in a sentence someone reads under pressure.
  */
-function confirmDetail(confirm: Confirm) {
+function confirmDetail(confirm: Confirm, t: (typeof content)["en"]) {
   if (confirm?.kind === "topic") {
     const count = confirm.topic.members.length
-    if (count === 0) {
-      return "O tópico não reúne nada ainda, então nada mais se perde com ele."
-    }
-    return `As ${count} ${
-      count === 1 ? "nota ou print continua" : "notas e prints continuam"
-    } no vault, intocadas — mas a lista de que ${
-      count === 1 ? "pertence" : "pertencem"
-    } a este tópico se perde, e refazer é na mão.`
+    return count === 0 ? t.topicEmpty : t.topicKeeps(count)
   }
   if (confirm?.kind === "entry") {
-    return confirm.entry.kind === "folder"
-      ? "A pasta e tudo dentro dela são apagados do disco. Não dá para desfazer."
-      : "O arquivo é apagado do disco e sai dos tópicos em que estava. Não dá para desfazer."
+    return confirm.entry.kind === "folder" ? t.folderGone : t.fileGone
   }
   return ""
 }
 
-function confirmLabel(confirm: Confirm) {
-  if (confirm?.kind === "topic") return `Apagar ${confirm.topic.name}`
-  if (confirm?.kind === "entry") return `Apagar ${confirm.entry.name}`
-  return "Apagar"
+function confirmLabel(confirm: Confirm, t: (typeof content)["en"]) {
+  if (confirm?.kind === "topic") return t.remove(confirm.topic.name)
+  if (confirm?.kind === "entry") return t.remove(confirm.entry.name)
+  return t.removePlain
 }
 
 /** A vault with nothing in it should say what to do, not shrug — and the way to
@@ -746,61 +933,46 @@ function confirmLabel(confirm: Confirm) {
 /** Whether the panels are covering the screen rather than sitting beside it. */
 const narrow = () => !window.matchMedia("(min-width: 640px)").matches
 
-/** A search that ends in a question mark is a question. */
-const isQuestion = (query: string) => query.trim().endsWith("?") && query.trim().length > 2
+/**
+ * What the AI would have to work with, before it is asked. The count comes from
+ * the search that already ran for free, so this line promises material rather
+ * than describing a button.
+ */
+function Readiness({ ready, notes }: { ready: boolean; notes: number }) {
+  const t = usePick()(content)
 
-function AskBanner({
-  ready,
-  busy,
-  onAsk,
-}: {
-  ready: boolean
-  busy: boolean
-  onAsk: () => void
-}) {
   if (!ready) {
     return (
       <p className="rounded-lg border border-dashed px-4 py-3 text-xs text-muted-foreground">
-        Para responder daqui, ponha uma chave do Groq ou do Gemini no seu arquivo de ambiente. Sem
-        ela a busca acima segue funcionando.
+        {t.noKey}
       </p>
     )
   }
 
   return (
-    <button
-      type="button"
-      onClick={onAsk}
-      disabled={busy}
-      className="flex w-full items-center justify-center gap-2 rounded-lg border border-found/40 bg-found/10 px-4 py-3 text-sm text-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
-    >
-      <Sparkles className="size-4 text-found" aria-hidden />
-      responder a partir das minhas notas
-    </button>
+    <p className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+      <Sparkles className="size-3.5 text-found" aria-hidden />
+      {notes === 0 ? t.nothingFound : t.notesSpeak(notes)}
+    </p>
   )
 }
-
-const emptyVault = (desktop: boolean) =>
-  desktop
-    ? "Vault vazio. Comece uma nota, ou arraste um print para esta janela."
-    : "Vault vazio. Comece uma nota, ou mande uma foto pelo +."
-
-const howToAdd = (desktop: boolean) =>
-  desktop
-    ? "Digite para buscar. Prints entram arrastando ou com Cmd+V dentro de uma nota."
-    : "Digite para buscar. Fotos entram pelo + aqui embaixo."
 
 function EmptyState({
   vault,
   dropping,
   onNewNote,
   onNewFolder,
+  onTry,
 }: {
   vault: VaultStatus | null
   dropping: boolean
   onNewNote: () => void
   onNewFolder: () => void
+  /** Demo only: nobody can search a vault they have never read without being
+   *  handed a question that works. */
+  onTry: (query: string) => void
 }) {
+  const t = usePick()(content)
   const empty = (vault?.notes ?? 0) === 0 && (vault?.images ?? 0) === 0
 
   return (
@@ -811,17 +983,42 @@ function EmptyState({
       )}
     >
       <p className="text-sm text-muted-foreground">
-        {empty ? emptyVault(isDesktop) : howToAdd(isDesktop)}
+        {isDemo
+          ? t.howDemo
+          : empty
+            ? isDesktop
+              ? t.emptyDesktop
+              : t.emptyPhone
+            : isDesktop
+              ? t.howDesktop
+              : t.howPhone}
       </p>
 
-      <div className="mt-4 flex justify-center gap-2">
+      {isDemo && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {t.examples.map((example) => (
+            <button
+              key={example}
+              type="button"
+              onClick={() => onTry(example)}
+              className="rounded-full border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+            >
+              {example}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isDemo && <p className="mt-6 text-xs text-muted-foreground">{t.dropHere}</p>}
+
+      <div className="mt-6 flex justify-center gap-4 border-t border-dashed pt-6">
         <button
           type="button"
           onClick={onNewNote}
           className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-90"
         >
           <FilePlus className="size-4" aria-hidden />
-          Nova nota
+          {t.newNote}
         </button>
         <button
           type="button"
@@ -829,7 +1026,7 @@ function EmptyState({
           className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <FolderPlus className="size-4" aria-hidden />
-          Nova pasta
+          {t.newFolder}
         </button>
       </div>
 
