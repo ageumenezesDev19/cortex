@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# The web demo's build output. Its input, demo/data-*.json, is committed on
+# purpose: those vectors come from the Rust example and the deploy host has
+# no cargo to regenerate them with.
+dist-demo
+.vercel
+
 # Compiled from ocr/main.swift by scripts/build-ocr.sh
 src-tauri/binaries
 

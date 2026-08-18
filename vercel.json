@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run demo:web",
+  "outputDirectory": "dist-demo",
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/demo-data-(.*).json",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=0, must-revalidate" }]
+    }
+  ]
+}
