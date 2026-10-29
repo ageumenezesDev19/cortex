@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{ask, db, embed, search, settings, vault};
+use crate::{ask, db, embed, index, search, settings, vault};
 
 /// Deep enough to tell "found, but low" from "not found".
 const DEPTH: usize = 10;
@@ -47,21 +47,28 @@ pub struct Outcome {
     pub visible: Option<bool>,
 }
 
-/// `eval-rag [--label name] [--gold path]`: measures both searches, writes the
-/// report next to the gold set and returns its path.
+/// `eval-rag [--label name] [--gold path] [--reindex]`: measures both searches,
+/// writes the report next to the gold set and returns its path.
 pub fn cli(args: &[String]) -> Result<PathBuf> {
     let label = flag(args, "--label").unwrap_or("medicao");
+    let reindex = args.iter().any(|arg| arg == "--reindex");
     let root = vault::root()?;
     let gold = flag(args, "--gold").map(PathBuf::from).unwrap_or_else(|| root.join(GOLD));
     let questions = load_gold(&gold)?;
 
-    let (conn, snapshot) = snapshot(&root)?;
-    let measured = measure_both(&root, &conn, &questions);
+    let (conn, snapshot) = snapshot(&root, reindex)?;
+    let measured = measure_both(&root, &conn, &questions)
+        .and_then(|both| Ok((both, census(&root, &conn, reindex)?)));
     drop(conn);
-    let _ = std::fs::remove_file(&snapshot);
-    let (words, hybrid) = measured?;
+    // `--keep` leaves the measured copy behind, for when a number needs explaining.
+    if args.iter().any(|arg| arg == "--keep") {
+        eprintln!("cópia medida: {}", snapshot.display());
+    } else {
+        let _ = std::fs::remove_file(&snapshot);
+    }
+    let ((words, hybrid), census) = measured?;
 
-    let report = report(label, &questions, &words, &hybrid, &census(&root)?);
+    let report = report(label, &questions, &words, &hybrid, &census);
     print!("{}", summary(&questions, &words, &hybrid));
 
     let out = root.join(REPORTS).join(format!("{}-{label}.md", today()?));
@@ -104,13 +111,35 @@ pub fn load_gold(path: &Path) -> Result<Vec<Question>> {
 }
 
 /// A consistent copy of the index, migrated to this build's schema.
-fn snapshot(root: &Path) -> Result<(Connection, PathBuf)> {
+fn snapshot(root: &Path, reindex: bool) -> Result<(Connection, PathBuf)> {
     let live = Connection::open_with_flags(vault::db_path(root), OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("abrindo o índice só para leitura")?;
     let copy = std::env::temp_dir().join(format!("cortex-eval-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&copy);
     live.execute("VACUUM INTO ?1", [copy.to_string_lossy()]).context("copiando o índice")?;
-    Ok((db::open(&copy)?, copy))
+    let conn = db::open(&copy)?;
+    if reindex {
+        rebuild(root, &copy, &conn)?;
+    }
+    // The reports quote every question word for word: left in, they are the best
+    // match for each one and the search ends up measuring itself.
+    conn.execute_batch(
+        "DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE path LIKE 'dev/avaliacoes/%');
+         DELETE FROM chunks WHERE path LIKE 'dev/avaliacoes/%';
+         DELETE FROM notes WHERE path LIKE 'dev/avaliacoes/%';",
+    )?;
+    Ok((conn, copy))
+}
+
+/// Recuts every note with this build's parser and re-embeds what changed, so a
+/// change to how notes are cut is measured on the cut it makes. Screenshots keep
+/// the OCR they already have: this is about passages, not reading pictures again.
+fn rebuild(root: &Path, copy: &Path, conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE notes SET content_hash = ''", [])?;
+    index::Indexer::new(root.to_path_buf(), db::open(copy)?).scan()?;
+    let model = settings::load(root).embedding_model;
+    embed::drain(root, conn, &model, |_, _| {}, || false).map_err(|error| anyhow!(error))?;
+    Ok(())
 }
 
 fn measure_both(
@@ -120,7 +149,10 @@ fn measure_both(
 ) -> Result<(Vec<Outcome>, Vec<Outcome>)> {
     // Without vectors the hybrid column would quietly measure words twice.
     if !embed::model_present() || embed::all(conn)?.is_empty() {
-        bail!("sem modelo de vetores ou sem vetores no índice: a busca híbrida não roda");
+        bail!(
+            "sem modelo de vetores ou sem vetores na cópia, e a busca híbrida não roda. \
+             Se a migração deste build esvaziou os vetores, rode com --reindex"
+        );
     }
     Ok((measure(root, conn, questions, Mode::Words)?, measure(root, conn, questions, Mode::Hybrid)?))
 }
@@ -210,17 +242,16 @@ fn rank_cell(rank: Option<usize>) -> String {
     rank.map_or_else(|| "—".into(), |r| r.to_string())
 }
 
-/// What the index held when it was measured, so two reports can be compared.
-fn census(root: &Path) -> Result<String> {
-    let live = Connection::open_with_flags(vault::db_path(root), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let count = |sql: &str| -> Result<i64> { Ok(live.query_row(sql, [], |row| row.get(0))?) };
+/// What the measured copy held, so two reports can be compared.
+fn census(root: &Path, conn: &Connection, reindexed: bool) -> Result<String> {
+    let count = |sql: &str| -> Result<i64> { Ok(conn.query_row(sql, [], |row| row.get(0))?) };
     Ok(format!(
-        "{} notas, {} trechos ({} de imagem), {} vetores; esquema {} no índice real; modelo `{}`",
+        "{} notas, {} trechos ({} de imagem), {} vetores, {}; modelo `{}`",
         count("SELECT count(*) FROM notes")?,
         count("SELECT count(*) FROM chunks")?,
         count("SELECT count(*) FROM chunks WHERE kind = 'image'")?,
         count("SELECT count(*) FROM embeddings")?,
-        count("PRAGMA user_version")?,
+        if reindexed { "notas recortadas por este build" } else { "trechos como estão no índice real" },
         settings::load(root).embedding_model,
     ))
 }
