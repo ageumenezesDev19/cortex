@@ -541,15 +541,24 @@ pub fn retrieve(
     models: Models<'_>,
     token: Option<u64>,
 ) -> Result<(Vec<Candidate>, bool), String> {
-    let candidates = gather(conn, &search::terms_of(question), excluded)?;
     // The vector knows what the words could not, so nothing else is needed: its
     // ranking and the search's are fused and that is the shortlist.
     let Some(semantic) = by_meaning(root, conn, question, excluded, models, token) else {
-        return Ok((candidates, false));
+        return Ok((gather(conn, &search::terms_of(question), excluded)?, false));
     };
-    let by_words: Vec<i64> = candidates.iter().map(|one| one.chunk_id).collect();
+    // The words side is the search box's own ranking of the whole question.
+    // Gathering term by term kept three passages per note for each word, and a
+    // long note cut into several passages hid the right one behind that cap.
+    let found = search::run(conn, question, None, 40).map_err(|error| error.to_string())?;
+    let by_words: Vec<i64> =
+        found.groups.iter().flat_map(|group| group.hits.iter().map(|hit| hit.chunk_id)).collect();
     let order = crate::embed::fuse(&by_words, &semantic);
-    Ok((reorder(conn, candidates, &order, excluded), true))
+    let candidates = order
+        .iter()
+        .filter_map(|id| candidate_of(conn, *id, excluded))
+        .take(MAX_CANDIDATES)
+        .collect();
+    Ok((candidates, true))
 }
 
 /// The chunk ids closest in meaning, or nothing when the vault has no vectors —
@@ -573,25 +582,6 @@ fn by_meaning(
         .filter(|id| candidate_of(conn, *id, excluded).is_some())
         .collect();
     (!allowed.is_empty()).then_some(allowed)
-}
-
-/// Puts the candidates in the order the ranking asked for, fetching the ones
-/// only the vector knew about.
-fn reorder(
-    conn: &Connection,
-    candidates: Vec<Candidate>,
-    order: &[i64],
-    excluded: &[String],
-) -> Vec<Candidate> {
-    let mut out = Vec::new();
-    for id in order {
-        if let Some(known) = candidates.iter().find(|one| one.chunk_id == *id) {
-            out.push(known.clone());
-        } else if let Some(fetched) = candidate_of(conn, *id, excluded) {
-            out.push(fetched);
-        }
-    }
-    out
 }
 
 /// Numbering happens last, because the number is what the answer cites and the

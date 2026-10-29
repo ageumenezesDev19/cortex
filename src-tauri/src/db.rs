@@ -4,7 +4,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Bumped whenever the schema changes.
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -54,6 +54,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if version < 7 {
         conn.execute_batch(SCHEMA_V7)?;
+    }
+    if version < 8 {
+        conn.execute_batch(SCHEMA_V8)?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -234,6 +237,15 @@ UPDATE chunks
 const SCHEMA_V7: &str = r#"
 ALTER TABLE assets ADD COLUMN content_hash TEXT;
 CREATE INDEX assets_hash_idx ON assets(content_hash);
+"#;
+
+/// Passages are now cut at 1 200 characters (`parse::SPLIT_AT`) and a text
+/// passage's vector carries its trail of headings (`embed::pending`). A note is
+/// recut only when its hash changes, so the hashes are cleared for the next scan;
+/// the old vectors do not look stale, so they are dropped, as in V5.
+const SCHEMA_V8: &str = r#"
+UPDATE notes SET content_hash = '';
+DELETE FROM embeddings;
 "#;
 
 #[cfg(test)]

@@ -113,16 +113,28 @@ pub fn coverage(conn: &Connection) -> Coverage {
 /// The passages with no vector, or whose text changed since it was made.
 pub fn pending(conn: &Connection) -> Result<Vec<Pending>> {
     let mut statement = conn.prepare(
-        "SELECT c.id, c.text FROM chunks c
+        "SELECT c.id, c.text, c.kind, c.heading_path FROM chunks c
          LEFT JOIN embeddings e ON e.chunk_id = c.id
          WHERE e.chunk_id IS NULL OR e.text_hash <> substr(c.text, 1, 64)
          ORDER BY c.id",
     )?;
     let rows = statement.query_map([], |row| {
         let text: String = row.get(1)?;
-        Ok(Pending { chunk_id: row.get(0)?, hash: hash_of(&text), text })
+        let input = input_of(&row.get::<_, String>(2)?, &row.get::<_, String>(3)?, &text);
+        Ok(Pending { chunk_id: row.get(0)?, hash: hash_of(&text), text: input })
     })?;
     Ok(rows.filter_map(Result::ok).collect())
+}
+
+/// What a passage's vector is made from. A text passage goes in behind its trail
+/// of headings: one cut from the middle of a long section often never names its
+/// subject. An image's trail is a file name and tags, which the OCR already says.
+fn input_of(kind: &str, trail: &str, text: &str) -> String {
+    if kind == "text" && !trail.is_empty() {
+        format!("{trail}\n{text}")
+    } else {
+        text.to_string()
+    }
 }
 
 /// The first 64 characters, which is what the SQL above compares against. Not a

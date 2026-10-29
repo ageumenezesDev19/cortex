@@ -2,6 +2,12 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 pub const HEADING_SEPARATOR: &str = " › ";
 
+/// A passage stops growing at the first block that ends past this. `ask` hands
+/// the model 1 200 characters of each passage and the vector sees about as much,
+/// so text beyond it was found but never read: a section of 8 000 characters
+/// answered only from its opening lines.
+const SPLIT_AT: usize = 1_200;
+
 #[derive(Debug, Clone)]
 pub struct Chunk {
     pub heading_path: String,
@@ -65,6 +71,16 @@ pub fn chunk_markdown(source: &str) -> Vec<Chunk> {
                 }
             }
             Event::SoftBreak | Event::HardBreak => push_text(&mut text, "\n"),
+            // Cut only where a block ends, so no sentence, list item or code
+            // block is split in two; the next passage keeps the same trail.
+            Event::End(TagEnd::Paragraph | TagEnd::Item | TagEnd::CodeBlock | TagEnd::Table)
+                if text.chars().count() >= SPLIT_AT =>
+            {
+                push(&mut chunks, &heading_path, start, range.end, &text, &opened_with);
+                text.clear();
+                start = range.end;
+                opened_with.clear();
+            }
             _ => {}
         }
     }
@@ -181,6 +197,29 @@ mod tests {
         let chunks = chunk_markdown(src);
         // Slicing with the offsets must not panic and must land on the heading.
         assert!(src[chunks[1].start..chunks[1].end].starts_with("## Ação"));
+    }
+
+    /// The study plan was one section of 8 000 characters; its end was never read.
+    #[test]
+    fn a_long_section_is_cut_between_paragraphs_and_keeps_its_trail() {
+        let paragraph = "uma linha de estudo com vídeo e link ".repeat(10);
+        let src = format!("# Estudo\n\n{}", format!("{paragraph}\n\n").repeat(12));
+        let chunks = chunk_markdown(&src);
+
+        assert!(chunks.len() > 1, "a seção longa continuou num trecho só");
+        for chunk in &chunks {
+            assert_eq!(chunk.heading_path, "Estudo");
+            assert!(chunk.text.chars().count() < SPLIT_AT + paragraph.chars().count());
+        }
+        // Back to back, the pieces are the whole note: nothing dropped at a cut.
+        let joined: String = chunks.iter().map(|c| &src[c.start..c.end]).collect();
+        assert_eq!(joined.trim(), src.trim(), "um pedaço do texto ficou de fora");
+    }
+
+    #[test]
+    fn a_short_section_stays_whole() {
+        let chunks = chunk_markdown("# Nota\n\num parágrafo\n\noutro parágrafo\n");
+        assert_eq!(chunks.len(), 1);
     }
 
     #[test]
