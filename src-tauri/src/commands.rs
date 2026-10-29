@@ -105,6 +105,15 @@ pub fn paste_image(
 }
 
 #[tauri::command]
+pub fn attach_images(
+    state: State<AppState>,
+    note_path: String,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    api::attach_images(&state, &note_path, paths)
+}
+
+#[tauri::command]
 pub fn list_topics(state: State<AppState>) -> Result<Vec<Topic>, String> {
     api::list_topics(&state)
 }

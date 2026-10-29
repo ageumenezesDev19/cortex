@@ -1,7 +1,8 @@
 import { Code2, TriangleAlert, Type } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { getNote, pasteImage, writeNote, type NoteContent } from "../lib/api"
+import { attachImages, getNote, pasteImage, writeNote, type NoteContent } from "../lib/api"
+import { onDropOnNote } from "../lib/drop"
 import { usePick } from "./language-provider"
 import { headingIndexAt, roundTripReport, type RoundTrip } from "../lib/markdown"
 import { RichEditor } from "./rich-editor"
@@ -138,6 +139,40 @@ export function NotePanel({ path, anchorStart, root }: Props) {
     [path],
   )
 
+  const onAttachImages = useCallback(
+    async (paths: string[]) => {
+      try {
+        return await attachImages(path, paths)
+      } catch (reason) {
+        setError(String(reason))
+        return []
+      }
+    },
+    [path],
+  )
+
+  // In markdown the rich editor is not mounted, and the textarea still answers
+  // to a drop as a note surface — so the link is written here instead.
+  useEffect(() => {
+    if (!raw) return
+    return onDropOnNote(({ paths }) => {
+      void (async () => {
+        const field = editor.current
+        if (!field) return
+
+        const sources = await onAttachImages(paths)
+        if (sources.length === 0) return
+
+        const at = field.selectionStart
+        const links = sources.map((source) => `![](${source})`).join("\n\n")
+        change(`${latest.current.slice(0, at)}${links}${latest.current.slice(at)}`)
+        // The caret belongs after what was just written, and the value it has to
+        // count against is only on screen from the next frame.
+        requestAnimationFrame(() => field.setSelectionRange(at + links.length, at + links.length))
+      })()
+    })
+  }, [raw, onAttachImages, change])
+
   const anchorHeading = useMemo(
     () => (note && anchorStart !== null ? headingIndexAt(note.source, anchorStart) : null),
     [note, anchorStart],
@@ -207,6 +242,7 @@ export function NotePanel({ path, anchorStart, root }: Props) {
             anchorHeading={anchorHeading}
             onChange={change}
             onPasteImage={onPasteImage}
+            onAttachImages={onAttachImages}
           />
         </div>
       )}

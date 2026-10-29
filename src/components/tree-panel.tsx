@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useRef, useState } from "react"
 
 import type { TreeEntry } from "../lib/api"
 import { usePick } from "./language-provider"
+import { useOpenFolders } from "../lib/prefs"
 import { cn } from "../lib/utils"
 
 type Props = {
@@ -56,6 +57,7 @@ export const TreePanel = forwardRef<HTMLElement, Props>(function TreePanel(
   const t = usePick()(content)
   const reduceMotion = useReducedMotion()
   const list = useScrollGuard()
+  const [open, toggle] = useOpenFolders()
 
   return (
         <motion.aside
@@ -105,6 +107,8 @@ export const TreePanel = forwardRef<HTMLElement, Props>(function TreePanel(
                 key={entry.path}
                 entry={entry}
                 depth={0}
+                open={open}
+                onToggle={toggle}
                 activePath={activePath}
                 onOpen={onOpen}
                 onCreateNote={onCreateNote}
@@ -157,6 +161,8 @@ function useScrollGuard() {
 function Node({
   entry,
   depth,
+  open,
+  onToggle,
   activePath,
   onOpen,
   onCreateNote,
@@ -166,11 +172,14 @@ function Node({
 }: {
   entry: TreeEntry
   depth: number
+  /** Which folders are open, kept by `useOpenFolders` and shared by the tree. */
+  open: Set<string>
+  onToggle: (path: string) => void
 } & Pick<
   Props,
   "activePath" | "onOpen" | "onCreateNote" | "onCreateFolder" | "onRename" | "onDelete"
 >) {
-  const [expanded, setExpanded] = useState(depth === 0)
+  const expanded = open.has(entry.path)
   const isFolder = entry.kind === "folder"
   const Icon = isFolder ? null : entry.kind === "image" ? ImageIcon : FileText
 
@@ -179,7 +188,7 @@ function Node({
       <div className="flex items-center gap-0.5">
         <button
           type="button"
-          onClick={() => (isFolder ? setExpanded((value) => !value) : onOpen(entry))}
+          onClick={() => (isFolder ? onToggle(entry.path) : onOpen(entry))}
           aria-expanded={isFolder ? expanded : undefined}
           aria-current={activePath === entry.path}
           // The panel is 256 px wide and the names came out of Notes long: two
@@ -224,6 +233,8 @@ function Node({
               key={child.path}
               entry={child}
               depth={depth + 1}
+              open={open}
+              onToggle={onToggle}
               activePath={activePath}
               onOpen={onOpen}
               onCreateNote={onCreateNote}

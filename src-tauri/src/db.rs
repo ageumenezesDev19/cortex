@@ -4,7 +4,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 /// Bumped whenever the schema changes.
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 7;
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -48,6 +48,12 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if version < 5 {
         conn.execute_batch(SCHEMA_V5)?;
+    }
+    if version < 6 {
+        conn.execute_batch(SCHEMA_V6)?;
+    }
+    if version < 7 {
+        conn.execute_batch(SCHEMA_V7)?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -208,3 +214,69 @@ CREATE TABLE embeddings (
 const SCHEMA_V5: &str = r#"
 DELETE FROM embeddings;
 "#;
+
+/// `assets.note_id` is where an image's note is recorded; `chunks.note_id` is the
+/// copy the search groups by, and the two were allowed to drift — a note indexed
+/// after the image it embeds updated the asset and left the chunk behind. The
+/// result was the same screenshot twice: once inside the note, once beside it.
+///
+/// The writes no longer drift. This is the once-over for what was indexed while
+/// they did, so nothing has to be scanned or read again.
+const SCHEMA_V6: &str = r#"
+UPDATE chunks
+   SET note_id = (SELECT note_id FROM assets WHERE id = chunks.asset_id)
+ WHERE kind = 'image' AND asset_id IS NOT NULL;
+"#;
+
+/// What a screenshot is, so two copies of one print can be recognised as one.
+/// Filled in by the indexer: SQL cannot read a file, so the column starts empty
+/// and the next scan hashes whatever is still missing.
+const SCHEMA_V7: &str = r#"
+ALTER TABLE assets ADD COLUMN content_hash TEXT;
+CREATE INDEX assets_hash_idx ON assets(content_hash);
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The repair for indexes written while the two columns could disagree.
+    #[test]
+    fn the_migration_gives_a_drifted_chunk_back_its_note() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO notes (id, path, title, folder, mtime, content_hash) VALUES
+              (1, 'react/hooks.md', 'Hooks', 'react', 0, 'a');
+            INSERT INTO assets (id, note_id, path, ocr_json, mtime) VALUES
+              (1, 1, 'react/_assets/print.png', NULL, 0);
+            INSERT INTO chunks (note_id, asset_id, kind, heading_path, text) VALUES
+              (NULL, 1, 'image', 'print.png', 'cache no print');
+            "#,
+        )
+        .unwrap();
+
+        // The statement that ships, rather than a faked downgrade: the ladder
+        // only ever runs forwards, and re-entering it would try to add a column
+        // that is already there.
+        conn.execute_batch(SCHEMA_V6).unwrap();
+
+        let note_id: Option<i64> = conn
+            .query_row("SELECT note_id FROM chunks WHERE kind = 'image'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(note_id, Some(1));
+
+        // The update trigger rewrites the row's entry in the external-content
+        // index. Only `note_id` changed, so the text it deletes is the text that
+        // was indexed — asserted rather than reasoned about, because an FTS that
+        // disagrees with its content table fails silently, as an empty search.
+        conn.execute_batch("INSERT INTO chunks_fts(chunks_fts) VALUES ('integrity-check')")
+            .expect("o índice de busca não sobreviveu à migração");
+        let found: i64 = conn
+            .query_row("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'cache'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(found, 1);
+    }
+}

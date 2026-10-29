@@ -157,6 +157,41 @@ pub fn paste_image(root: &Path, note_path: &str, bytes: &[u8], extension: &str) 
     Ok(format!("![]({}/{name})", vault::ASSETS_DIR))
 }
 
+/// Copies a screenshot dropped from outside the vault into the `_assets/` beside
+/// a note, and returns what belongs inside the markdown link.
+///
+/// A copy, not a move: the file being dragged is still the Desktop's, and the
+/// gesture should not empty the folder it came from.
+pub fn copy_into_assets(root: &Path, note_path: &str, source: &Path) -> Result<String> {
+    if !vault::is_image(source) {
+        return Err(anyhow!("isso não é uma imagem"));
+    }
+
+    let note = vault::resolve(root, note_path)?;
+    let assets = note
+        .parent()
+        .ok_or_else(|| anyhow!("nota sem pasta"))?
+        .join(vault::ASSETS_DIR);
+    std::fs::create_dir_all(&assets)?;
+
+    // "Screenshot 2026-08-14 at 1.57.12 AM.png": a space ends a markdown URL
+    // right where it sits.
+    let safe = vault::safe_file_name(
+        &source
+            .file_name()
+            .ok_or_else(|| anyhow!("imagem sem nome"))?
+            .to_string_lossy(),
+    );
+    let destination = crate::api::free_name(&assets, &safe);
+    std::fs::copy(source, &destination)?;
+
+    let name = destination
+        .file_name()
+        .ok_or_else(|| anyhow!("imagem sem nome"))?
+        .to_string_lossy();
+    Ok(format!("{}/{name}", vault::ASSETS_DIR))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +244,37 @@ mod tests {
 
         assert!(rename(dir.path(), &other, "Hooks").is_err());
         assert!(dir.path().join("estado.md").exists());
+    }
+
+    #[test]
+    fn a_print_dropped_on_a_note_lands_beside_it_and_stays_where_it_came_from() {
+        let dir = TempDir::new().unwrap();
+        let note = create_note(dir.path(), "react", "Hooks").unwrap();
+        let outside = TempDir::new().unwrap();
+        // The name macOS gives a screenshot: the spaces would end the markdown
+        // link at the first one.
+        let print = outside.path().join("Screenshot 2026-08-14 at 1.57.12 AM.png");
+        std::fs::write(&print, b"x").unwrap();
+
+        let source = copy_into_assets(dir.path(), &note, &print).unwrap();
+
+        assert_eq!(source, "_assets/screenshot-2026-08-14-at-1-57-12-am.png");
+        assert!(dir.path().join("react").join(&source).exists());
+        assert!(print.exists(), "o arquivo era da Mesa, não do vault");
+    }
+
+    #[test]
+    fn two_prints_with_the_same_name_do_not_overwrite_each_other() {
+        let dir = TempDir::new().unwrap();
+        let note = create_note(dir.path(), "", "Hooks").unwrap();
+        let outside = TempDir::new().unwrap();
+        let print = outside.path().join("print.png");
+        std::fs::write(&print, b"x").unwrap();
+
+        copy_into_assets(dir.path(), &note, &print).unwrap();
+        let second = copy_into_assets(dir.path(), &note, &print).unwrap();
+
+        assert_eq!(second, "_assets/print-1.png");
     }
 
     #[test]

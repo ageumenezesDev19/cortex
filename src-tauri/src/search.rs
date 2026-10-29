@@ -70,6 +70,20 @@ LIMIT ?
 const GROUP_KEY: &str =
     "CASE WHEN c.note_id IS NOT NULL THEN 'n' || c.note_id ELSE 'a' || c.asset_id END";
 
+/// The same print can be in the vault twice: dropped in loose one day, then put
+/// into a note another. Both are indexed, both match, and the answer comes back
+/// doubled — the note's copy and a bare screenshot of the very same picture.
+///
+/// The one inside a note wins, because it is the one with an answer around it.
+/// Identity is the bytes: a hash that is still missing means "not known to be a
+/// copy", and nothing is hidden on a guess.
+const HIDE_LOOSE_TWIN: &str = "NOT (
+      c.kind = 'image' AND a.note_id IS NULL AND a.content_hash IS NOT NULL
+      AND EXISTS (SELECT 1 FROM assets twin
+                   WHERE twin.content_hash = a.content_hash
+                     AND twin.note_id IS NOT NULL)
+    )";
+
 fn full_text_sql() -> String {
     format!(
         r#"
@@ -86,6 +100,7 @@ WITH matches AS (
   LEFT JOIN notes  n ON n.id = c.note_id
   LEFT JOIN assets a ON a.id = c.asset_id
   WHERE chunks_fts MATCH ?1
+    AND {HIDE_LOOSE_TWIN}
     AND (?2 IS NULL OR EXISTS (
       SELECT 1 FROM topic_members tm
       WHERE tm.topic_slug = ?2 AND tm.target_path IN (n.path, a.path)
@@ -108,7 +123,8 @@ WITH matches AS (
   FROM chunks c
   LEFT JOIN notes  n ON n.id = c.note_id
   LEFT JOIN assets a ON a.id = c.asset_id
-  WHERE EXISTS (
+  WHERE {HIDE_LOOSE_TWIN}
+    AND EXISTS (
     SELECT 1 FROM topic_members tm
     WHERE tm.topic_slug = ?1 AND tm.target_path IN (n.path, a.path)
   )
@@ -401,6 +417,48 @@ mod tests {
         // Three text passages by rank, plus the print that would have been cut.
         assert_eq!(actions.hits.len(), CHUNKS_PER_GROUP as usize + 1);
         assert!(actions.hits.iter().any(|hit| hit.kind == "image"));
+    }
+
+    /// The print was dropped in loose first and put into a note later, so the
+    /// vault holds it twice. The answer is the note's copy, once.
+    #[test]
+    fn a_loose_copy_of_a_print_that_lives_in_a_note_stays_out() {
+        let conn = fixture();
+        conn.execute_batch(
+            r#"
+            UPDATE assets SET content_hash = 'mesmo' WHERE id = 1;
+            INSERT INTO assets (id, note_id, path, ocr_json, mtime, content_hash) VALUES
+              (2, NULL, 'inbox/_assets/print.png', NULL, 0, 'mesmo');
+            INSERT INTO chunks (note_id, asset_id, kind, heading_path, text, title, path) VALUES
+              (NULL, 2, 'image', 'print.png', 'cache no print', 'print.png', 'inbox/_assets/print.png');
+            "#,
+        )
+        .unwrap();
+
+        let groups = run(&conn, "cache", None, 40).unwrap().groups;
+        assert_eq!(groups.len(), 2, "a cópia solta virou um terceiro resultado");
+        assert!(groups.iter().all(|g| g.path != "inbox/_assets/print.png"));
+    }
+
+    /// Two loose copies are left alone: neither is in a note, so neither has a
+    /// claim on being the one to show.
+    #[test]
+    fn two_loose_copies_are_both_kept() {
+        let conn = fixture();
+        conn.execute_batch(
+            r#"
+            INSERT INTO assets (id, note_id, path, ocr_json, mtime, content_hash) VALUES
+              (2, NULL, 'inbox/_assets/a.png', NULL, 0, 'mesmo'),
+              (3, NULL, 'inbox/_assets/b.png', NULL, 0, 'mesmo');
+            INSERT INTO chunks (note_id, asset_id, kind, heading_path, text, title, path) VALUES
+              (NULL, 2, 'image', 'a.png', 'cache solto', 'a.png', 'inbox/_assets/a.png'),
+              (NULL, 3, 'image', 'b.png', 'cache solto', 'b.png', 'inbox/_assets/b.png');
+            "#,
+        )
+        .unwrap();
+
+        let groups = run(&conn, "cache", None, 40).unwrap().groups;
+        assert_eq!(groups.len(), 4);
     }
 
     #[test]

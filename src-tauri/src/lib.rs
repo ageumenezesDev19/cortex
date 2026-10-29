@@ -90,6 +90,7 @@ pub fn run() {
             commands::rename_entry,
             commands::delete_entry,
             commands::paste_image,
+            commands::attach_images,
             commands::list_topics,
             commands::create_topic,
             commands::update_topic,

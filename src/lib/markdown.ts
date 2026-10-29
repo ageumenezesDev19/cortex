@@ -74,6 +74,30 @@ function lineOf(source: string, culprit: string): number {
 export const survivesRoundTrip = (source: string) => roundTripReport(source).survives
 
 /**
+ * An image's width, as Obsidian writes it: `![|400](print.png)`, or
+ * `![legenda|400](…)` when it also has a caption.
+ *
+ * It rides in the alt text instead of in the schema because the note has to come
+ * back from the serializer byte for byte — `esc` leaves a pipe alone, and the
+ * guard above would otherwise call every sized note lossy and lock it out of the
+ * editor. That it is also what Obsidian reads is the part that costs nothing.
+ */
+export function imageWidth(alt: string | null | undefined): number | null {
+  const found = /\|(\d+)$/.exec(alt ?? "")
+  return found ? Number(found[1]) : null
+}
+
+/** The same alt carrying a different width, or none. */
+export function altWithWidth(
+  alt: string | null | undefined,
+  width: number | null,
+): string | null {
+  const caption = (alt ?? "").replace(/\|\d+$/, "")
+  if (width === null) return caption || null
+  return `${caption}|${width}`
+}
+
+/**
  * Compares meaning, not bytes. A paragraph hand-wrapped at 80 columns and the
  * same paragraph on one long line are the same markdown, and the serializer does
  * not re-wrap — without this every hand-wrapped note would be called lossy and

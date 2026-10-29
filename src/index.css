@@ -163,8 +163,29 @@
   .cortex-prose a {
     @apply text-found underline underline-offset-2;
   }
+  /* A screenshot of a whole display used to arrive the full width of the column
+     and push the next line a screen away. The ceiling is a default: an image
+     given a width of its own overrides it from the node view. */
   .cortex-prose img {
-    @apply my-3 max-w-full rounded-md border;
+    @apply block max-h-[60vh] max-w-full rounded-md border;
+  }
+
+  /* The image and the bar of sizes that sits over it while it is selected. The
+     margin lives here so the bar can be positioned against the image itself. */
+  .cortex-image {
+    @apply relative my-3 inline-block align-bottom;
+  }
+  .cortex-image[data-selected] img {
+    @apply ring-2 ring-found;
+  }
+  .cortex-image-bar {
+    @apply absolute right-2 top-2 flex gap-0.5 rounded-md border bg-card/95 p-0.5 shadow-lg;
+  }
+  .cortex-image-bar button {
+    @apply min-w-7 rounded px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
+  }
+  .cortex-image-bar button[data-on] {
+    @apply bg-muted text-foreground;
   }
 
   .cortex-prose code {
@@ -180,5 +201,12 @@
   /* Where the search landed. Cleared the moment the cursor enters the text. */
   .cortex-found {
     @apply rounded-md bg-found/10 px-2 shadow-[inset_0_0_0_1px_hsl(var(--found))];
+  }
+
+  /* A file is over this note and will land in it, rather than in the inbox. A
+     tint rather than a border: the rich editor is as tall as the note, so a
+     frame around it has its bottom edge somewhere below the window. */
+  [data-note-surface][data-drop-target] {
+    @apply rounded-md bg-found/10;
   }
 }

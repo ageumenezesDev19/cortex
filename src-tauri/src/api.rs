@@ -153,6 +153,69 @@ pub fn import_images(state: &AppState, paths: Vec<String>) -> Answer<Vec<String>
     Ok(copied)
 }
 
+/// Screenshots dropped on an open note, written beside it. Returns the sources
+/// to put in the markdown, in the order they were dropped.
+///
+/// Nothing here runs OCR: the watcher sees the new file and indexes it, which is
+/// the same single way into the index that a paste or the Finder takes.
+pub fn attach_images(state: &AppState, note_path: &str, paths: Vec<String>) -> Answer<Vec<String>> {
+    let mut written = Vec::new();
+    for path in paths {
+        let source = PathBuf::from(&path);
+        if !vault::is_image(&source) {
+            continue;
+        }
+        written.push(attach_one(state, note_path, &source)?);
+    }
+    Ok(written)
+}
+
+/// Dropping a print that is already sitting loose in the vault moves that one
+/// into the note instead of writing a second copy of the same picture. The OCR
+/// it has already been through travels with it, and the search stops answering
+/// twice for one screenshot.
+fn attach_one(state: &AppState, note_path: &str, source: &Path) -> Answer<String> {
+    let Some(loose) = loose_twin(state, source)? else {
+        return files::copy_into_assets(&state.root, note_path, source).map_err(|e| e.to_string());
+    };
+
+    // The move refuses a name already taken beside the note. Another screenshot
+    // happening to share a file name is no reason to lose the drop, so it falls
+    // back to the copy, which numbers the name instead.
+    let Ok(moved) = files::move_into_assets(&state.root, &loose, note_path) else {
+        return files::copy_into_assets(&state.root, note_path, source).map_err(|e| e.to_string());
+    };
+    topics::retarget(&state.root, &loose, Some(&moved)).map_err(|e| e.to_string())?;
+
+    let name = moved.rsplit('/').next().unwrap_or(&moved);
+    Ok(format!("{}/{name}", vault::ASSETS_DIR))
+}
+
+/// The same bytes, already in the vault and belonging to no note.
+///
+/// A copy that belongs to another note is left alone: moving it would empty the
+/// `![]()` in a note nobody asked about.
+fn loose_twin(state: &AppState, source: &Path) -> Answer<Option<String>> {
+    let Some(hash) = vault::content_hash(source) else {
+        return Ok(None);
+    };
+
+    let found: Option<String> = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT path FROM assets WHERE content_hash = ?1 AND note_id IS NULL LIMIT 1",
+            [&hash],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    };
+
+    // A row can outlive its file; a path that is no longer there would turn the
+    // drop into a failed move rather than a copy.
+    Ok(found.filter(|rel| vault::absolute(&state.root, rel).exists()))
+}
+
 /// The first name in `folder` that is not taken, counting up from `name`.
 pub fn free_name(folder: &Path, name: &str) -> PathBuf {
     let mut destination = folder.join(name);
@@ -518,4 +581,115 @@ pub fn import_preview(state: &AppState) -> Answer<ImportPreview> {
         folders: folders.iter().filter(|folder| !folder.is_empty()).count() as u32,
         already: manifest.len() as u32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn vault() -> (TempDir, AppState) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("react")).unwrap();
+        std::fs::create_dir_all(root.join("inbox").join(vault::ASSETS_DIR)).unwrap();
+        std::fs::write(root.join("react").join("hooks.md"), "# Hooks\n\n").unwrap();
+
+        let state = AppState {
+            conn: Mutex::new(crate::db::open_in_memory().unwrap()),
+            root,
+        };
+        (dir, state)
+    }
+
+    /// The print was dropped into the app on its own first, and is now being
+    /// dropped onto a note. One picture, so one file: the loose one moves in.
+    #[test]
+    fn a_print_already_loose_in_the_vault_moves_into_the_note() {
+        let (dir, state) = vault();
+        let desktop = dir.path().join("print.png");
+        std::fs::write(&desktop, b"os mesmos bytes").unwrap();
+
+        let loose = state.root.join("inbox").join(vault::ASSETS_DIR).join("print.png");
+        std::fs::write(&loose, b"os mesmos bytes").unwrap();
+        state
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets (path, ocr_json, mtime, content_hash)
+                 VALUES ('inbox/_assets/print.png', NULL, 0, ?1)",
+                [vault::content_hash(&loose).unwrap()],
+            )
+            .unwrap();
+
+        let written = attach_images(
+            &state,
+            "react/hooks.md",
+            vec![desktop.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(written, ["_assets/print.png"]);
+        assert!(state.root.join("react/_assets/print.png").exists());
+        assert!(!loose.exists(), "a cópia solta ficou para trás");
+    }
+
+    /// Nothing in the vault matches, so the drop is a plain copy and the file on
+    /// the desktop stays where it is.
+    #[test]
+    fn a_print_from_outside_is_copied_in() {
+        let (dir, state) = vault();
+        let desktop = dir.path().join("print.png");
+        std::fs::write(&desktop, b"bytes novos").unwrap();
+
+        let written = attach_images(
+            &state,
+            "react/hooks.md",
+            vec![desktop.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(written, ["_assets/print.png"]);
+        assert!(state.root.join("react/_assets/print.png").exists());
+        assert!(desktop.exists(), "o arquivo era da Mesa");
+    }
+
+    /// A copy that already belongs to another note is not up for grabs: moving
+    /// it would empty an `![]()` in a note nobody touched.
+    #[test]
+    fn a_print_that_belongs_to_another_note_is_left_where_it_is() {
+        let (dir, state) = vault();
+        let desktop = dir.path().join("print.png");
+        std::fs::write(&desktop, b"os mesmos bytes").unwrap();
+
+        std::fs::create_dir_all(state.root.join("outra").join(vault::ASSETS_DIR)).unwrap();
+        let taken = state.root.join("outra").join(vault::ASSETS_DIR).join("print.png");
+        std::fs::write(&taken, b"os mesmos bytes").unwrap();
+        {
+            let conn = state.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO notes (id, path, title, folder, mtime, content_hash)
+                 VALUES (1, 'outra/nota.md', 'Outra', 'outra', 0, 'x')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO assets (path, ocr_json, mtime, note_id, content_hash)
+                 VALUES ('outra/_assets/print.png', NULL, 0, 1, ?1)",
+                [vault::content_hash(&taken).unwrap()],
+            )
+            .unwrap();
+        }
+
+        attach_images(
+            &state,
+            "react/hooks.md",
+            vec![desktop.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        assert!(taken.exists(), "a imagem da outra nota foi levada embora");
+        assert!(state.root.join("react/_assets/print.png").exists());
+    }
 }
