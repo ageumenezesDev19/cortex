@@ -479,33 +479,25 @@ pub fn run(
     let mut terms = local.clone();
     let mut kind = local_kind(question);
 
-    let mut candidates = gather(conn, &local, excluded)?;
+    let (mut candidates, by_vector) = retrieve(root, conn, question, excluded, models, token)?;
 
     // Three roads out of here, and a question only ever walks one of them, so a
-    // question costs two calls at most: the retrieval one and the answer.
-    match by_meaning(root, conn, question, excluded, models, token) {
-        // The vector knows what the words could not, so nothing else is needed:
-        // its ranking and the search's are fused and that is the shortlist.
-        Some(semantic) => {
-            let by_words: Vec<i64> = candidates.iter().map(|one| one.chunk_id).collect();
-            let order = crate::embed::fuse(&by_words, &semantic);
-            candidates = reorder(conn, candidates, &order, excluded);
-        }
+    // question costs two calls at most: the retrieval one and the answer. With
+    // vectors, `retrieve` already walked the first road.
+    if !by_vector {
         // No vectors and too many candidates: the model reads the shortlist and
         // says which ones are about the question. This is what kills the
         // "Meu Nicho:" citation.
-        None if candidates.len() > ENOUGH_TO_SIFT => {
+        if candidates.len() > ENOUGH_TO_SIFT {
             candidates = sift(root, question, candidates, models, token);
-        }
         // No vectors and barely anything: more words are what is missing, not
         // fewer, so the model is asked for terms instead.
-        None if candidates.len() < ENOUGH_WITHOUT_HELP => {
+        } else if candidates.len() < ENOUGH_WITHOUT_HELP {
             let (wider, said) = expand(root, question, models, &local, token);
             terms = wider;
             kind = said;
             candidates = gather(conn, &terms, excluded)?;
         }
-        None => {}
     }
 
     candidates.truncate(MAX_SOURCES);
@@ -535,6 +527,29 @@ pub fn run(
         provider: answer.provider,
         terms,
     })
+}
+
+/// What a question finds before any model is called: the passages for its words,
+/// fused with the vectors when the vault has them. The flag says whether the
+/// vectors ran; `run` takes a different road without them, and an evaluation
+/// that silently measured words alone would report the wrong search.
+pub fn retrieve(
+    root: &Path,
+    conn: &Connection,
+    question: &str,
+    excluded: &[String],
+    models: Models<'_>,
+    token: Option<u64>,
+) -> Result<(Vec<Candidate>, bool), String> {
+    let candidates = gather(conn, &search::terms_of(question), excluded)?;
+    // The vector knows what the words could not, so nothing else is needed: its
+    // ranking and the search's are fused and that is the shortlist.
+    let Some(semantic) = by_meaning(root, conn, question, excluded, models, token) else {
+        return Ok((candidates, false));
+    };
+    let by_words: Vec<i64> = candidates.iter().map(|one| one.chunk_id).collect();
+    let order = crate::embed::fuse(&by_words, &semantic);
+    Ok((reorder(conn, candidates, &order, excluded), true))
 }
 
 /// The chunk ids closest in meaning, or nothing when the vault has no vectors —

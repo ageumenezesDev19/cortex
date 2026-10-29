@@ -4,6 +4,7 @@ pub mod classify;
 mod commands;
 mod db;
 pub mod embed;
+pub mod eval;
 mod files;
 pub mod html;
 pub mod import;

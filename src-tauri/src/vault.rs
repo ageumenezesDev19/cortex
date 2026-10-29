@@ -128,7 +128,7 @@ pub fn slugify(name: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
-fn fold(character: char) -> char {
+pub fn fold(character: char) -> char {
     match character {
         'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
         'é' | 'è' | 'ê' | 'ë' => 'e',

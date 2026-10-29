@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Local-first knowledge base where every screenshot becomes searchable text"
 authors = ["Ageu Menezes"]
 edition = "2021"
+# `src/bin/cortex-mcp.rs` is a second binary; without this `tauri dev` cannot tell
+# which one is the app.
+default-run = "cortex"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
