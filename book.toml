@@ -1,0 +1,13 @@
+[book]
+title = "Cortex"
+language = "en"
+src = "documentation"
+
+[build]
+build-dir = "documentation-html"
+
+[output.html]
+git-repository-url = "https://github.com/ageumenezesDev19/cortex"
+
+[output.html.redirect]
+"/click-here.html" = "index.html"
