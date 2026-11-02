@@ -24,6 +24,10 @@ pub struct Settings {
     /// default — the person decides what is private, not the app.
     #[serde(default)]
     pub excluded: Vec<String>,
+    /// The only folders an MCP client (Claude Code, Codex) may search or read.
+    /// `_importado` and `inbox` stay out until they are added here.
+    #[serde(default = "default_mcp_folders")]
+    pub mcp_folders: Vec<String>,
     /// Free-tier model names change without notice; a rename must not need a
     /// rebuild, so they live here rather than in the code.
     #[serde(default = "default_groq_model")]
@@ -115,6 +119,10 @@ fn default_embedding_model() -> String {
     "multilingual-e5-small".to_string()
 }
 
+fn default_mcp_folders() -> Vec<String> {
+    ["ia", "mentoria-dev", "revisao-dev", "rocketseat", "dev"].iter().map(|folder| folder.to_string()).collect()
+}
+
 fn default_gemini_ladder() -> Vec<String> {
     ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-lite-latest"]
         .iter()
@@ -131,6 +139,7 @@ impl Default for Settings {
             local_network: false,
             tailscale: false,
             excluded: Vec::new(),
+            mcp_folders: default_mcp_folders(),
             groq_model: default_groq_model(),
             gemini_model: default_gemini_model(),
             gemini_expand_model: default_gemini_expand_model(),

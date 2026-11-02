@@ -239,6 +239,16 @@ export const deleteEntry = (path: string) => call<void>("delete_entry", { path }
 export const pasteImage = (notePath: string, bytes: number[], extension: string) =>
   call<string>("paste_image", { notePath, bytes, extension })
 
+/**
+ * Screenshots dropped on an open note, copied in beside it. Returns each one's
+ * source, ready for the markdown link.
+ *
+ * Desktop only: `paths` are paths on the Mac's disk, which a browser dropping a
+ * file never has.
+ */
+export const attachImages = (notePath: string, paths: string[]) =>
+  call<string[]>("attach_images", { notePath, paths })
+
 export const listTopics = () => call<Topic[]>("list_topics")
 
 export const createTopic = (name: string, icon: string | null, color: string | null) =>

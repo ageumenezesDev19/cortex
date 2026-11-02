@@ -112,11 +112,28 @@ impl Indexer {
         }
 
         // Screenshots the note points at belong to it, so an image result can
-        // say which note it came from.
+        // say which note it came from — and so the search shows the print inside
+        // the note instead of a second time beside it.
+        //
+        // Cleared before being set, or an image taken out of a note would stay
+        // filed under it forever. The chunk carries the same link because that
+        // is the column the search groups by; leaving it behind is what used to
+        // put one screenshot in two results.
         {
+            tx.execute("UPDATE assets SET note_id = NULL WHERE note_id = ?1", [note_id])?;
+            tx.execute(
+                "UPDATE chunks SET note_id = NULL WHERE note_id = ?1 AND kind = 'image'",
+                [note_id],
+            )?;
+
             let mut link = tx.prepare("UPDATE assets SET note_id = ?1 WHERE path = ?2")?;
+            let mut link_chunks = tx.prepare(
+                "UPDATE chunks SET note_id = ?1
+                 WHERE asset_id = (SELECT id FROM assets WHERE path = ?2)",
+            )?;
             for asset_rel in &linked_assets {
                 link.execute(params![note_id, asset_rel])?;
+                link_chunks.execute(params![note_id, asset_rel])?;
             }
         }
         tx.commit()?;
@@ -157,15 +174,28 @@ pub fn index_asset_into(
 
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO assets (path, ocr_json, mtime, note_id)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO assets (path, ocr_json, mtime, note_id, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(path) DO UPDATE SET
                ocr_json = excluded.ocr_json, mtime = excluded.mtime,
-               note_id = COALESCE(excluded.note_id, assets.note_id)",
-            params![rel, serde_json::to_string(ocr)?, mtime, note_id],
+               note_id = COALESCE(excluded.note_id, assets.note_id),
+               content_hash = excluded.content_hash",
+            params![
+                rel,
+                serde_json::to_string(ocr)?,
+                mtime,
+                note_id,
+                vault::content_hash(abs)
+            ],
         )?;
-        let asset_id: i64 =
-            tx.query_row("SELECT id FROM assets WHERE path = ?1", [&rel], |r| r.get(0))?;
+        // Read back rather than reuse the parameter: the upsert above keeps the
+        // owner this run did not find, and the chunk has to say the same thing
+        // the asset does or the search splits the image off into its own result.
+        let (asset_id, owner): (i64, Option<i64>) = tx.query_row(
+            "SELECT id, note_id FROM assets WHERE path = ?1",
+            [&rel],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
 
         // The marks join the indexed text, so searching `css` finds a
         // screenshot of a stylesheet even though the word never appears in it.
@@ -188,7 +218,7 @@ pub fn index_asset_into(
             tx.execute(
                 "INSERT INTO chunks (asset_id, note_id, kind, heading_path, text, title, path)
                  VALUES (?1, ?2, 'image', ?3, ?4, ?5, ?6)",
-                params![asset_id, note_id, heading, text, label, rel],
+                params![asset_id, owner, heading, text, label, rel],
             )?;
         }
         tx.commit()?;
@@ -234,7 +264,32 @@ impl Indexer {
             }
         }
         self.prune_missing()?;
+        self.fill_missing_hashes()?;
         Ok(pending_images)
+    }
+
+    /// Screenshots indexed before the column existed. Reading the bytes is cheap
+    /// next to the OCR they already went through, so they are hashed here rather
+    /// than sent round the whole pipeline again.
+    fn fill_missing_hashes(&mut self) -> Result<()> {
+        let stale: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path FROM assets WHERE content_hash IS NULL")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        for rel in stale {
+            let Some(hash) = vault::content_hash(&vault::absolute(&self.root, &rel)) else {
+                continue;
+            };
+            self.conn.execute(
+                "UPDATE assets SET content_hash = ?1 WHERE path = ?2",
+                params![hash, rel],
+            )?;
+        }
+        Ok(())
     }
 
     /// Drops rows whose file disappeared while the app was closed.
@@ -315,5 +370,80 @@ impl Indexer {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn ocr(text: &str) -> crate::ocr::OcrResult {
+        crate::ocr::OcrResult {
+            text: text.into(),
+            blocks: Vec::new(),
+            lang: "pt".into(),
+            ocr_at: String::new(),
+            marks: None,
+        }
+    }
+
+    /// A note, a screenshot beside it, and control over which is read first.
+    ///
+    /// The root is canonical because `resolve_link` canonicalises what it
+    /// resolves, and on macOS a temporary folder is reached through a symlink —
+    /// an uncanonical root would make every link in the test fall outside it.
+    fn vault() -> (TempDir, Indexer) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("react").join("_assets")).unwrap();
+        let indexer = Indexer::new(root, crate::db::open_in_memory().unwrap());
+        (dir, indexer)
+    }
+
+    fn chunk_note_id(indexer: &Indexer) -> Option<i64> {
+        indexer
+            .conn
+            .query_row("SELECT note_id FROM chunks WHERE kind = 'image'", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The bug this covers: the image was read before the note pointed at it, so
+    /// its chunk carried no note and the search showed the print a second time,
+    /// loose, beside the note that already contained it.
+    #[test]
+    fn a_print_linked_after_it_was_read_belongs_to_the_note() {
+        let (dir, mut indexer) = vault();
+        let note = indexer.root().join("react").join("hooks.md");
+        let print = indexer.root().join("react").join("_assets").join("print.png");
+
+        std::fs::write(&note, "# Hooks\n\ntexto\n").unwrap();
+        indexer.index_note(&note).unwrap();
+        std::fs::write(&print, b"x").unwrap();
+        indexer.index_asset(&print, &ocr("cache no print")).unwrap();
+        assert_eq!(chunk_note_id(&indexer), None, "nada aponta para o print ainda");
+
+        std::fs::write(&note, "# Hooks\n\ntexto\n\n![](_assets/print.png)\n").unwrap();
+        indexer.index_note(&note).unwrap();
+
+        assert!(chunk_note_id(&indexer).is_some(), "o print ficaria solto na busca");
+    }
+
+    #[test]
+    fn a_print_taken_out_of_a_note_is_loose_again() {
+        let (dir, mut indexer) = vault();
+        let note = indexer.root().join("react").join("hooks.md");
+        let print = indexer.root().join("react").join("_assets").join("print.png");
+
+        std::fs::write(&note, "# Hooks\n\n![](_assets/print.png)\n").unwrap();
+        std::fs::write(&print, b"x").unwrap();
+        indexer.index_asset(&print, &ocr("cache no print")).unwrap();
+        indexer.index_note(&note).unwrap();
+        assert!(chunk_note_id(&indexer).is_some());
+
+        std::fs::write(&note, "# Hooks\n\nsem o print\n").unwrap();
+        indexer.index_note(&note).unwrap();
+
+        assert_eq!(chunk_note_id(&indexer), None, "o vínculo sobreviveu à edição");
     }
 }

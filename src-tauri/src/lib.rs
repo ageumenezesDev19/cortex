@@ -2,16 +2,20 @@ pub mod api;
 mod ask;
 pub mod classify;
 mod commands;
-mod db;
+pub mod db;
+mod devvault;
 pub mod embed;
+pub mod eval;
 mod files;
 pub mod html;
 pub mod import;
 pub mod index;
 pub mod marks;
+pub mod mcp;
 mod ocr;
 pub mod parse;
 mod provider;
+mod retrieve;
 mod search;
 mod secrets;
 mod serve;
@@ -90,6 +94,7 @@ pub fn run() {
             commands::rename_entry,
             commands::delete_entry,
             commands::paste_image,
+            commands::attach_images,
             commands::list_topics,
             commands::create_topic,
             commands::update_topic,

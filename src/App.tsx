@@ -60,6 +60,7 @@ import {
   type TreeEntry,
   type VaultStatus,
 } from "./lib/api"
+import { DROP_ON_NOTE, noteSurfaceAt, type DropOnNote } from "./lib/drop"
 import { useLocalToggle } from "./lib/prefs"
 import { cn } from "./lib/utils"
 import { useViewportHeight } from "./lib/viewport"
@@ -234,12 +235,51 @@ export default function App() {
     // Dragging a file onto the window is a desktop gesture; the phone sends a
     // photo through the picker instead.
     if (!isDesktop) return
+
+    // Tauri reports the pointer in device pixels; the DOM is asked in CSS ones.
+    const point = (position: { x: number; y: number }) => ({
+      x: position.x / window.devicePixelRatio,
+      y: position.y / window.devicePixelRatio,
+    })
+
+    // Which note is about to receive the print, said out loud while the file is
+    // still in the air. Set on the element rather than carried down as a prop:
+    // it is the element the hit test already found.
+    let marked: HTMLElement | null = null
+    const mark = (surface: HTMLElement | null) => {
+      if (marked === surface) return
+      if (marked) delete marked.dataset.dropTarget
+      if (surface) surface.dataset.dropTarget = "true"
+      marked = surface
+    }
+
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "over") return setDropping(true)
-      if (event.payload.type === "leave") return setDropping(false)
+      if (event.payload.type === "leave") {
+        mark(null)
+        return setDropping(false)
+      }
+      if (event.payload.type === "over") {
+        const { x, y } = point(event.payload.position)
+        mark(noteSurfaceAt(x, y))
+        return setDropping(true)
+      }
       if (event.payload.type !== "drop") return
       setDropping(false)
-      importImages(event.payload.paths)
+      mark(null)
+
+      // A print let go over the open note belongs in that note, at the spot it
+      // was dropped. Anywhere else in the window it goes to the inbox, which is
+      // where every drop used to land regardless.
+      const { x, y } = point(event.payload.position)
+      const { paths } = event.payload
+      if (noteSurfaceAt(x, y)) {
+        window.dispatchEvent(
+          new CustomEvent<DropOnNote>(DROP_ON_NOTE, { detail: { paths, x, y } }),
+        )
+        return
+      }
+
+      importImages(paths)
         .then((written) => {
           const last = written[written.length - 1]
           if (last) setDropped({ path: last, read: false })
@@ -247,6 +287,7 @@ export default function App() {
         .catch(() => {})
     })
     return () => {
+      mark(null)
       unlisten.then((stop) => stop())
     }
   }, [])

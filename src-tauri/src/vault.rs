@@ -128,7 +128,7 @@ pub fn slugify(name: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
-fn fold(character: char) -> char {
+pub fn fold(character: char) -> char {
     match character {
         'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
         'é' | 'è' | 'ê' | 'ë' => 'e',
@@ -240,6 +240,16 @@ pub fn folder_of(relative: &str) -> String {
         Some((folder, _)) => folder.to_string(),
         None => String::new(),
     }
+}
+
+/// What a file is, regardless of where it sits or what it is called.
+///
+/// The same screenshot can arrive twice — dropped loose into the vault once and
+/// then put into a note — and nothing about its name or its path says the two
+/// are one picture. Its bytes do.
+pub fn content_hash(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(blake3::hash(&bytes).to_hex().to_string())
 }
 
 pub fn mtime_of(path: &Path) -> i64 {

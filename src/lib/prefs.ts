@@ -29,3 +29,38 @@ export function useLocalToggle(key: string, fallback = false) {
 
   return [on, useCallback(() => setOn((value) => !value), [])] as const
 }
+
+/**
+ * The folders left open in the tree, by vault-relative path.
+ *
+ * Here rather than in the panel's own state because the panel unmounts every
+ * time it closes: a folder shut on Monday came back open on the next click.
+ */
+export function useOpenFolders(key = "cortex:tree-open") {
+  const [open, setOpen] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(key)
+      return new Set(stored ? (JSON.parse(stored) as string[]) : [])
+    } catch {
+      return new Set()
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify([...open]))
+    } catch {
+      /* nothing to do about it, and nothing worth breaking over */
+    }
+  }, [key, open])
+
+  const toggle = useCallback((path: string) => {
+    setOpen((current) => {
+      const next = new Set(current)
+      if (!next.delete(path)) next.add(path)
+      return next
+    })
+  }, [])
+
+  return [open, toggle] as const
+}

@@ -1,0 +1,35 @@
+# Builds CHANGELOG.md from the commit history: `git cliff -o CHANGELOG.md`.
+# Grouped by day rather than by type: most subjects are plain sentences, and
+# guessing Added or Fixed from their first word would mislabel them.
+
+[changelog]
+header = """
+# Changelog
+
+What changed, newest first. Generated from the commit history with git-cliff.
+"""
+body = """
+{%- if version %}
+## {{ version }}
+{% endif -%}
+{%- set_global day = "" -%}
+{%- for commit in commits -%}
+{%- set this = commit.committer.timestamp | date(format="%Y-%m-%d") -%}
+{%- if this != day %}
+
+### {{ this }}
+{% set_global day = this -%}
+{%- endif %}
+- {{ commit.message | split(pat="\n") | first | trim_start_matches(pat="feat: ") | trim_start_matches(pat="fix: ") | trim_start_matches(pat="docs: ") | trim_start_matches(pat="build: ") | upper_first }}
+{%- endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+commit_parsers = [
+  { message = "^chore", skip = true },
+  { message = ".*", group = "changes" },
+]
+sort_commits = "newest"

@@ -1,7 +1,13 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 
-import { headingIndexAt, roundTripReport, survivesRoundTrip } from "../src/lib/markdown"
+import {
+  altWithWidth,
+  headingIndexAt,
+  imageWidth,
+  roundTripReport,
+  survivesRoundTrip,
+} from "../src/lib/markdown"
 
 /**
  * The rich editor rewrites a whole note on save, so anything the schema cannot
@@ -57,6 +63,19 @@ console.log()
 // The guard has to refuse what it cannot represent, or the save commits the loss.
 check("tabela é refusada pela guarda", !survivesRoundTrip("# N\n\n| a | b |\n| - | - |\n| 1 | 2 |\n"))
 check("nota simples passa pela guarda", survivesRoundTrip("# N\n\ntexto\n\n## Dois\n\nmais\n"))
+
+// An image's width lives in its alt text. If the serializer ever escaped the
+// pipe, the guard would call every sized note lossy and lock it out of the
+// editor — so the round trip is asserted, not assumed.
+check("imagem com largura passa pela guarda", survivesRoundTrip("![|320](_assets/print.png)\n"))
+check(
+  "largura com legenda passa pela guarda",
+  survivesRoundTrip("![Uma legenda|320](_assets/print.png)\n"),
+)
+check("a largura é lida do alt", imageWidth("|320") === 320 && imageWidth("legenda") === null)
+check("original tira a largura", altWithWidth("legenda|320", null) === "legenda")
+check("sem legenda e sem largura o alt é vazio", altWithWidth("|320", null) === null)
+check("trocar de tamanho não duplica o sufixo", altWithWidth("|320", 880) === "|880")
 
 // Heading counting drives the anchor jump, so a `#` inside a fence must not count.
 const fenced = "# Um\n\ntexto\n\n```\n# não é título\n```\n\n## Dois\n\nfim\n"
