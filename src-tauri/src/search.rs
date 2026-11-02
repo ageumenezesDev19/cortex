@@ -132,6 +132,32 @@ WITH matches AS (
     )
 }
 
+/// Passages already ranked elsewhere, grouped the way a search groups them. The
+/// position in the list is the score, so the group order is the caller's.
+fn ranked_sql() -> String {
+    format!(
+        r#"
+WITH wanted AS (
+  SELECT CAST(value AS INTEGER) AS id, CAST(key AS INTEGER) AS position FROM json_each(?1)
+), matches AS (
+  SELECT c.id AS chunk_id, c.kind, c.heading_path, c.start_offset, c.end_offset,
+         c.note_id, c.asset_id,
+         {GROUP_KEY} AS group_key,
+         substr(c.text, 1, 180) AS snippet,
+         w.position AS score
+  FROM wanted w
+  JOIN chunks c ON c.id = w.id
+  LEFT JOIN notes  n ON n.id = c.note_id
+  LEFT JOIN assets a ON a.id = c.asset_id
+  WHERE {HIDE_LOOSE_TWIN}
+    AND (?2 IS NULL OR EXISTS (
+      SELECT 1 FROM topic_members tm
+      WHERE tm.topic_slug = ?2 AND tm.target_path IN (n.path, a.path)
+    ))
+{RANK_AND_SELECT}"#
+    )
+}
+
 /// What a search found, and what it had to do to find it.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,6 +195,26 @@ pub fn run(conn: &Connection, query: &str, topic: Option<&str>, limit: u32) -> R
     }
 
     Ok(Found { groups: search(&any_of(&terms))?, widened: true, terms })
+}
+
+/// Groups passages in the order given, best first. A passage the words also
+/// found keeps their snippet, so the matched words stay marked; one found only
+/// by meaning shows how it begins.
+pub fn in_order(conn: &Connection, ids: &[i64], words: &Found, topic: Option<&str>, limit: u32) -> Result<Vec<Group>> {
+    let mut stmt = conn.prepare_cached(&ranked_sql())?;
+    let rows = stmt.query(rusqlite::params![serde_json::to_string(ids)?, topic, CHUNKS_PER_GROUP, limit])?;
+    let mut groups = collect(rows)?;
+    let marked: std::collections::HashMap<i64, &str> = words
+        .groups
+        .iter()
+        .flat_map(|group| group.hits.iter().map(|hit| (hit.chunk_id, hit.snippet.as_str())))
+        .collect();
+    for hit in groups.iter_mut().flat_map(|group| group.hits.iter_mut()) {
+        if let Some(snippet) = marked.get(&hit.chunk_id) {
+            hit.snippet = snippet.to_string();
+        }
+    }
+    Ok(groups)
 }
 
 fn collect(mut rows: rusqlite::Rows<'_>) -> Result<Vec<Group>> {
@@ -417,6 +463,40 @@ mod tests {
         // Three text passages by rank, plus the print that would have been cut.
         assert_eq!(actions.hits.len(), CHUNKS_PER_GROUP as usize + 1);
         assert!(actions.hits.iter().any(|hit| hit.kind == "image"));
+    }
+
+    /// Fused results arrive as chunk ids; the box still shows notes, in the order
+    /// the fusion put their best passage, with the same cap and image slot.
+    #[test]
+    fn passages_ranked_elsewhere_group_in_the_order_given() {
+        let conn = fixture();
+        let groups = in_order(&conn, &[6, 1, 2, 3, 4, 5], &Found::default(), None, 40).unwrap();
+
+        assert_eq!(groups[0].title, "Hooks");
+        let actions = &groups[1];
+        assert_eq!(actions.total, 5);
+        assert_eq!(actions.hits.len(), CHUNKS_PER_GROUP as usize + 1);
+        assert!(actions.hits.iter().any(|hit| hit.kind == "image"));
+    }
+
+    #[test]
+    fn a_word_hit_keeps_its_marks_and_a_meaning_hit_shows_how_it_begins() {
+        let conn = fixture();
+        let words = run(&conn, "hooks", None, 40).unwrap();
+        let groups = in_order(&conn, &[1, 6], &words, None, 40).unwrap();
+
+        let hooks = groups.iter().find(|g| g.title == "Hooks").unwrap();
+        assert!(hooks.hits[0].snippet.contains("<<<"), "{}", hooks.hits[0].snippet);
+        let actions = groups.iter().find(|g| g.title == "Server Actions").unwrap();
+        assert_eq!(actions.hits[0].snippet, "cache cache cache");
+    }
+
+    #[test]
+    fn a_topic_still_filters_passages_ranked_elsewhere() {
+        let conn = fixture();
+        let groups = in_order(&conn, &[1, 6], &Found::default(), Some("react"), 40).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "Hooks");
     }
 
     /// The print was dropped in loose first and put into a note later, so the

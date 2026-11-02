@@ -173,7 +173,7 @@ fn classify(root: &Path, image: &Path, result: &mut ocr::OcrResult) {
     let relative = vault::relative(root, image).unwrap_or_default();
     // A screenshot under an excluded path is never sent anywhere, so the rule
     // decides alone.
-    let may_ask = !crate::ask::is_excluded(&relative, &settings.excluded);
+    let may_ask = !crate::retrieve::is_excluded(&relative, &settings.excluded);
 
     let marks = crate::classify::marks(
         root,

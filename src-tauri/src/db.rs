@@ -19,6 +19,29 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Opens an index without migrating it, and refuses one on another schema.
+/// For the MCP server: only the app converts the index, so an older app is
+/// never left reading a file a newer build changed under it.
+pub fn open_current(path: &Path) -> Result<Connection> {
+    if !path.exists() {
+        anyhow::bail!("não há índice em {}: abra o Cortex uma vez", path.display());
+    }
+    // Read-only until the version matches, so a refusal leaves the file as it was.
+    let probe = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let version: i32 = probe.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    drop(probe);
+    if version != SCHEMA_VERSION {
+        anyhow::bail!(
+            "o índice está no formato {version} e este cortex-mcp lê o {SCHEMA_VERSION}: \
+             abra o Cortex atualizado uma vez para ele converter"
+        );
+    }
+    let conn = Connection::open(path)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(conn)
+}
+
 /// Same schema, no file. Lets the search tests run against the real SQL rather
 /// than a hand-written copy of it that could drift.
 #[cfg(test)]

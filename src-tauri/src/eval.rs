@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{ask, db, embed, index, search, settings, vault};
+use crate::{db, embed, index, retrieve, search, settings, vault};
 
 /// Deep enough to tell "found, but low" from "not found".
 const DEPTH: usize = 10;
@@ -34,9 +34,9 @@ pub struct Question {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// The search box: words only.
+    /// Words only: the control, and what the box falls back to without vectors.
     Words,
-    /// What a question to the vault gathers: words fused with vectors.
+    /// Words fused with vectors: what the box and a question both rank by.
     Hybrid,
 }
 
@@ -159,12 +159,6 @@ fn measure_both(
 
 pub fn measure(root: &Path, conn: &Connection, questions: &[Question], mode: Mode) -> Result<Vec<Outcome>> {
     let settings = settings::load(root);
-    let models = ask::Models {
-        groq: &settings.groq_model,
-        gemini: &[],
-        gemini_expand: &settings.gemini_expand_model,
-        embedding: &settings.embedding_model,
-    };
     let mut outcomes = Vec::new();
     for question in questions {
         let outcome = match mode {
@@ -176,7 +170,7 @@ pub fn measure(root: &Path, conn: &Connection, questions: &[Question], mode: Mod
             }
             Mode::Hybrid => {
                 let (candidates, by_vector) =
-                    ask::retrieve(root, conn, &question.text, &settings.excluded, models, None)
+                    retrieve::retrieve(root, conn, &question.text, &settings.excluded, &settings.embedding_model)
                         .map_err(|error| anyhow!(error))?;
                 if !by_vector {
                     bail!("{}: os vetores não rodaram", question.id);
@@ -277,7 +271,7 @@ fn report(label: &str, questions: &[Question], words: &[Outcome], hybrid: &[Outc
     let _ = writeln!(out, "- Acerto: trecho da nota esperada com o texto esperado entre os {DEPTH} primeiros\n");
 
     let _ = writeln!(out, "| Busca | recall@1 | recall@5 | recall@10 | MRR@10 |\n|---|---|---|---|---|");
-    for (name, list) in [("palavras (caixa)", words), ("híbrida (pergunta)", hybrid)] {
+    for (name, list) in [("palavras", words), ("híbrida (caixa e pergunta)", hybrid)] {
         let s = score(&list.iter().collect::<Vec<_>>());
         let _ = writeln!(out, "| {name} | {} | {} | {} | {:.2} |", percent(s.at1), percent(s.at5), percent(s.at10), s.mrr);
     }

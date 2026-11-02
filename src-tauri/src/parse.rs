@@ -37,9 +37,14 @@ pub fn chunk_markdown(source: &str) -> Vec<Chunk> {
     // The heading this chunk opened with, to recognise a chunk that is nothing
     // but it.
     let mut opened_with = String::new();
+    // Front matter describes the note to tools; it is not something to find.
+    let mut in_metadata = false;
 
     for (event, range) in parser {
         match event {
+            Event::Start(Tag::MetadataBlock(_)) => in_metadata = true,
+            Event::End(TagEnd::MetadataBlock(_)) => in_metadata = false,
+            Event::Text(_) if in_metadata => {}
             Event::Start(Tag::Heading { level, .. }) => {
                 push(&mut chunks, &heading_path, start, range.start, &text, &opened_with);
                 text.clear();
@@ -169,6 +174,15 @@ fn push(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn front_matter_is_not_a_passage() {
+        let source = "---\nname: banco\ndescription: \"Banco em SQLite\"\nmetadata:\n  type: project\n---\n\nO banco do alfa fica em SQLite com WAL.\n";
+        let chunks = chunk_markdown(source);
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].text.contains("metadata"), "{}", chunks[0].text);
+        assert!(chunks[0].text.contains("SQLite com WAL"));
+    }
 
     #[test]
     fn splits_at_headings_and_keeps_the_trail() {

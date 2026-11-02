@@ -12,25 +12,18 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::provider::{self, Provider};
+use crate::retrieve::{self, Candidate, Source};
 use crate::search;
 
 /// The passages that reach the answer. Eight rather than twenty: the prompt
 /// drops from ~6 000 tokens to ~2 400, and Groq's ceiling is 12 000 per minute,
 /// so this is the difference between one question a minute and three.
 const MAX_SOURCES: usize = 8;
-/// The shortlist before anything ranks it.
-const MAX_CANDIDATES: usize = 24;
 /// Above this the shortlist is long enough to be worth sifting.
 const ENOUGH_TO_SIFT: usize = 8;
 /// How much of a passage the sifting model reads. Enough to judge, not enough
 /// to spend the minute's tokens on a list it is going to throw most of away.
 const SIFT_PREVIEW_CHARS: usize = 200;
-/// Long passages are trimmed rather than dropped: half a passage still supports
-/// a citation, a missing one supports nothing.
-const MAX_CHARS: usize = 1_200;
-/// Below this a passage is a heading or a stray line — it cannot support an
-/// answer, and bm25 ranks it above real prose precisely because it is short.
-const MIN_SOURCE_CHARS: usize = 80;
 /// Passages enough to answer from without paying a provider to guess more
 /// search terms. Gemini's free tier is 20 requests a day, so a question the
 /// plain search already answered must not cost two of them.
@@ -39,19 +32,6 @@ const MIN_SOURCE_CHARS: usize = 80;
 /// `CHUNKS_PER_GROUP` passages, so a higher bar would mean a single good note
 /// never counted as an answer.
 const ENOUGH_WITHOUT_HELP: usize = 3;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Source {
-    /// The number the answer cites, starting at 1.
-    pub index: usize,
-    pub path: String,
-    pub title: String,
-    pub heading_path: String,
-    /// Byte offset of the passage, so a citation lands on the anchor the same
-    /// way a search result does.
-    pub start_offset: i64,
-}
 
 /// Which model answers what. The expansion gets its own because the free tiers
 /// price them differently by a factor of twenty-five.
@@ -229,83 +209,6 @@ fn parse_terms(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// One passage, with everything a citation needs and the id the rankings speak
-/// in.
-#[derive(Debug, Clone)]
-pub struct Candidate {
-    pub chunk_id: i64,
-    pub source: Source,
-    pub text: String,
-}
-
-/// Gathers passages for every term, the ones answering most of them first.
-///
-/// Ordered by how many terms a passage carries, not by which term came first:
-/// walking term by term gave the top places to whatever matched "arquivos",
-/// and the fusion downstream reads that order as relevance.
-fn gather(
-    conn: &Connection,
-    terms: &[String],
-    excluded: &[String],
-) -> Result<Vec<Candidate>, String> {
-    let mut found_candidates: Vec<Candidate> = Vec::new();
-    let mut seen: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
-    // How many distinct terms each passage answered, in step with the vector
-    // above so the sort can carry both.
-    let mut hits_per_candidate: Vec<usize> = Vec::new();
-
-    for term in terms {
-        let found = search::run(conn, term, None, 8).map_err(|error| error.to_string())?;
-        for group in found.groups {
-            if is_excluded(&group.path, excluded) {
-                continue;
-            }
-            for hit in group.hits {
-                if let Some(&at) = seen.get(&hit.chunk_id) {
-                    // Seen for an earlier term: that is the signal, not a
-                    // duplicate to drop.
-                    hits_per_candidate[at] += 1;
-                    continue;
-                }
-                let Some(text) = chunk_text(conn, hit.chunk_id) else { continue };
-                // A passage too short to say anything is not worth a citation,
-                // and it is what the model was being handed: a heading, alone.
-                if text.trim().chars().count() < MIN_SOURCE_CHARS {
-                    continue;
-                }
-
-                seen.insert(hit.chunk_id, found_candidates.len());
-                hits_per_candidate.push(1);
-                found_candidates.push(Candidate {
-                    chunk_id: hit.chunk_id,
-                    source: Source {
-                        index: 0,
-                        path: group.path.clone(),
-                        title: group.title.clone(),
-                        heading_path: hit.heading_path,
-                        start_offset: hit.start_offset,
-                    },
-                    text: trim(&text),
-                });
-            }
-        }
-    }
-
-    // Stable, so passages answering the same number of terms keep the order
-    // bm25 gave them inside each term's own results.
-    let mut order: Vec<usize> = (0..found_candidates.len()).collect();
-    order.sort_by_key(|&at| std::cmp::Reverse(hits_per_candidate[at]));
-
-    // Capped after ranking rather than during collection: cutting at
-    // MAX_CANDIDATES mid-walk threw away passages that answered every term
-    // simply because a common word filled the list first.
-    Ok(order
-        .into_iter()
-        .take(MAX_CANDIDATES)
-        .map(|at| found_candidates[at].clone())
-        .collect())
-}
-
 const SIFT_SYSTEM: &str = "\
 Você recebe uma pergunta e uma lista numerada de trechos de notas. \
 Responda APENAS com os números dos trechos que realmente falam do que a pergunta \
@@ -355,63 +258,6 @@ fn parse_choice(reply: &str, total: usize) -> Vec<usize> {
         }
     }
     seen
-}
-
-/// One passage by id, for a hit the vector found and the words did not.
-fn candidate_of(conn: &Connection, chunk_id: i64, excluded: &[String]) -> Option<Candidate> {
-    let row = conn
-        .query_row(
-            "SELECT c.text, c.heading_path, c.start_offset,
-                    COALESCE(n.path, a.path, c.path), COALESCE(n.title, c.title)
-             FROM chunks c
-             LEFT JOIN notes n  ON n.id = c.note_id
-             LEFT JOIN assets a ON a.id = c.asset_id
-             WHERE c.id = ?1",
-            [chunk_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            },
-        )
-        .ok()?;
-
-    let (text, heading_path, start_offset, path, title) = row;
-    // The exclusion is checked here too: a vector hit never went through the
-    // search, so this is the only gate on its way out.
-    if is_excluded(&path, excluded) || text.trim().chars().count() < MIN_SOURCE_CHARS {
-        return None;
-    }
-    Some(Candidate {
-        chunk_id,
-        source: Source { index: 0, path, title, heading_path, start_offset },
-        text: trim(&text),
-    })
-}
-
-/// A path under an excluded prefix never leaves the machine — not as a passage,
-/// not as a title.
-pub fn is_excluded(path: &str, excluded: &[String]) -> bool {
-    excluded.iter().any(|prefix| {
-        let prefix = prefix.trim_end_matches('/');
-        !prefix.is_empty() && (path == prefix || path.starts_with(&format!("{prefix}/")))
-    })
-}
-
-fn chunk_text(conn: &Connection, chunk_id: i64) -> Option<String> {
-    conn.query_row("SELECT text FROM chunks WHERE id = ?1", [chunk_id], |row| row.get(0))
-        .ok()
-}
-
-fn trim(text: &str) -> String {
-    if text.chars().count() <= MAX_CHARS {
-        return text.to_string();
-    }
-    text.chars().take(MAX_CHARS).collect::<String>() + "…"
 }
 
 /// Whether any gathered passage actually carries one of the words that were
@@ -479,7 +325,7 @@ pub fn run(
     let mut terms = local.clone();
     let mut kind = local_kind(question);
 
-    let (mut candidates, by_vector) = retrieve(root, conn, question, excluded, models, token)?;
+    let (mut candidates, by_vector) = retrieve::retrieve(root, conn, question, excluded, models.embedding)?;
 
     // Three roads out of here, and a question only ever walks one of them, so a
     // question costs two calls at most: the retrieval one and the answer. With
@@ -496,7 +342,8 @@ pub fn run(
             let (wider, said) = expand(root, question, models, &local, token);
             terms = wider;
             kind = said;
-            candidates = gather(conn, &terms, excluded)?;
+            let admits = |path: &str| !retrieve::is_excluded(path, excluded);
+            candidates = retrieve::gather(conn, &terms, &admits, retrieve::MIN_SOURCE_CHARS)?;
         }
     }
 
@@ -527,61 +374,6 @@ pub fn run(
         provider: answer.provider,
         terms,
     })
-}
-
-/// What a question finds before any model is called: the passages for its words,
-/// fused with the vectors when the vault has them. The flag says whether the
-/// vectors ran; `run` takes a different road without them, and an evaluation
-/// that silently measured words alone would report the wrong search.
-pub fn retrieve(
-    root: &Path,
-    conn: &Connection,
-    question: &str,
-    excluded: &[String],
-    models: Models<'_>,
-    token: Option<u64>,
-) -> Result<(Vec<Candidate>, bool), String> {
-    // The vector knows what the words could not, so nothing else is needed: its
-    // ranking and the search's are fused and that is the shortlist.
-    let Some(semantic) = by_meaning(root, conn, question, excluded, models, token) else {
-        return Ok((gather(conn, &search::terms_of(question), excluded)?, false));
-    };
-    // The words side is the search box's own ranking of the whole question.
-    // Gathering term by term kept three passages per note for each word, and a
-    // long note cut into several passages hid the right one behind that cap.
-    let found = search::run(conn, question, None, 40).map_err(|error| error.to_string())?;
-    let by_words: Vec<i64> =
-        found.groups.iter().flat_map(|group| group.hits.iter().map(|hit| hit.chunk_id)).collect();
-    let order = crate::embed::fuse(&by_words, &semantic);
-    let candidates = order
-        .iter()
-        .filter_map(|id| candidate_of(conn, *id, excluded))
-        .take(MAX_CANDIDATES)
-        .collect();
-    Ok((candidates, true))
-}
-
-/// The chunk ids closest in meaning, or nothing when the vault has no vectors —
-/// which is every vault until someone asks for them, and every vault with no
-/// Gemini key.
-fn by_meaning(
-    root: &Path,
-    conn: &Connection,
-    question: &str,
-    excluded: &[String],
-    models: Models<'_>,
-    token: Option<u64>,
-) -> Option<Vec<i64>> {
-    let vectors = crate::embed::all(conn).ok().filter(|all| !all.is_empty())?;
-    let _ = token;
-    let asked = crate::embed::embed_one(root, models.embedding, question).ok()?;
-
-    let near = crate::embed::nearest(&vectors, &asked, MAX_CANDIDATES);
-    let allowed: Vec<i64> = near
-        .into_iter()
-        .filter(|id| candidate_of(conn, *id, excluded).is_some())
-        .collect();
-    (!allowed.is_empty()).then_some(allowed)
 }
 
 /// Numbering happens last, because the number is what the answer cites and the
@@ -654,12 +446,12 @@ mod tests {
         }
 
         let local = search::terms_of("Onde esta os assuntos sobre CSS?");
-        let found = gather(&conn, &local, &[]).unwrap();
+        let found = retrieve::gather(&conn, &local, &|_| true, retrieve::MIN_SOURCE_CHARS).unwrap();
         assert!(found.len() >= ENOUGH_WITHOUT_HELP, "achou {}", found.len());
 
         // And a question the vault knows nothing about stays on the road that
         // asks for help, which is where the extra call earns itself.
-        let nothing = gather(&conn, &["kubernetes".to_string()], &[]).unwrap();
+        let nothing = retrieve::gather(&conn, &["kubernetes".to_string()], &|_| true, retrieve::MIN_SOURCE_CHARS).unwrap();
         assert!(nothing.len() < ENOUGH_WITHOUT_HELP);
     }
 
@@ -761,28 +553,6 @@ mod tests {
         assert_eq!(parse_terms(many).len(), 5);
     }
 
-    /// The one rule that keeps a note off the network.
-    #[test]
-    fn an_excluded_prefix_covers_the_folder_and_the_note_itself() {
-        let excluded = vec!["_importado/projects-dev".to_string()];
-        assert!(is_excluded("_importado/projects-dev/project-komerben.md", &excluded));
-        assert!(is_excluded("_importado/projects-dev", &excluded));
-    }
-
-    /// A prefix must not match a sibling that merely starts with the same
-    /// letters, or excluding one folder would silently gag another.
-    #[test]
-    fn a_neighbour_with_a_similar_name_is_not_excluded() {
-        let excluded = vec!["notes".to_string()];
-        assert!(!is_excluded("notes-antigas/x.md", &excluded));
-        assert!(is_excluded("notes/x.md", &excluded));
-    }
-
-    #[test]
-    fn an_empty_exclusion_gags_nothing() {
-        assert!(!is_excluded("qualquer/nota.md", &["".to_string(), "/".to_string()]));
-    }
-
     #[test]
     fn the_prompt_numbers_the_passages_it_asks_to_be_cited() {
         let sources = vec![
@@ -813,11 +583,4 @@ mod tests {
         assert!(built.ends_with("Pergunta: como invalidar?"));
     }
 
-    #[test]
-    fn a_long_passage_is_trimmed_rather_than_dropped() {
-        let long = "a".repeat(MAX_CHARS + 500);
-        let trimmed = trim(&long);
-        assert_eq!(trimmed.chars().count(), MAX_CHARS + 1);
-        assert!(trimmed.ends_with('…'));
-    }
 }

@@ -81,8 +81,9 @@ pub fn search(
     topic: Option<&str>,
     limit: Option<u32>,
 ) -> Answer<search::Found> {
+    let model = crate::settings::load(&state.root).embedding_model;
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    search::run(&conn, query, topic, limit.unwrap_or(40)).map_err(|error| error.to_string())
+    crate::retrieve::search_box(&state.root, &conn, query, topic, limit.unwrap_or(40), &model)
 }
 
 pub fn get_note(state: &AppState, path: String) -> Answer<NoteContent> {
@@ -478,7 +479,7 @@ pub fn classify_one(state: &AppState, image: &Path) -> Answer<bool> {
 
     let settings = crate::settings::load(&state.root);
     let relative = vault::relative(&state.root, image).map_err(|e| e.to_string())?;
-    let may_ask = !crate::ask::is_excluded(&relative, &settings.excluded);
+    let may_ask = !crate::retrieve::is_excluded(&relative, &settings.excluded);
 
     let marks = crate::classify::marks(
         &state.root,
